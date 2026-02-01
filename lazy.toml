@@ -1,26 +1,49 @@
+# ImLazy configuration file
+
+[settings]
+default = "test"
+# parallel = true  # Enable to run dependencies in parallel
+
+[variables]
+name = "imlazy"
+output_dir = "bin"
+
+[env]
+GO111MODULE = "on"
+
 [commands]
+
 [commands.build]
 desc = "Build the project"
-run = ["go build -o imlazy"]
-  
+run = ["go build -o {{name}}"]
+alias = ["b"]
+watch = ["**/*.go"]
+if_changed = ["**/*.go", "go.mod", "go.sum"]
+
 [commands.test]
 desc = "Test current project"
 run = ["go test ./..."]
+alias = ["t"]
+watch = ["**/*.go"]
 
 [commands.example]
-desc = "test that example command is passed to parser"
-run = ["echo Nothing"]
+desc = "Test that example command is passed to parser"
+run = ["echo Running on {{os}}/{{arch}} in {{cwd}}"]
 
 [commands.format]
-desc = "format the core code using go"
+desc = "Format the core code using go"
 run = ["go fmt ./..."]
+alias = ["fmt", "f"]
 
 [commands.install]
 desc = "Install imlazy to the local bin"
-run = ["mv ./imlazy /usr/local/bin/"]
+run = ["mv ./{{name}} /usr/local/bin/"]
 dep = ["build"]
 
-
 [commands.uninstall]
-desc = "uninstall imlazy from local bin"
-run = ["rm /usr/local/bin/imlazy"]
+desc = "Uninstall imlazy from local bin"
+run = ["rm /usr/local/bin/{{name}}"]
+
+[commands.clean]
+desc = "Clean the local repo"
+run = ["rm ./imlazy"]
