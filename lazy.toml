@@ -2,8 +2,7 @@
 [commands.build]
 desc = "Build the project"
 run = [
-"echo $SHELL",
-"echo done"
+"go build -o imlazy"
 ]
   
 [commands.test]

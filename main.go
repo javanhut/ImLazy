@@ -12,8 +12,8 @@ import (
 
 
 func main() {
+	var VersionNumber string = "0.1.0" 
 	cfg := parser.Config{}
-	log.Println("Attempting to parse toml")
 	info, err := cfg.ReadToml()
 	if err != nil {
 		log.Fatal(fmt.Sprintf("Error: %v", err))
@@ -21,12 +21,13 @@ func main() {
 	command := os.Args[1]
 	if command == "how" || command == "help" {
 		info.PrintCommands()
-		fmt.Printf("  %-10s prints out the commands list", command)
+		verStr := "version"
+		fmt.Printf("  %-10s prints out the commands list\n", command)
+		fmt.Printf("  %-10s returns the version of ImLazy\n", verStr)
+	} else if command == "--version" || command == "-v" || command == "version"{
+		fmt.Println("ImLazy Version: ", VersionNumber)
+
 	} else {
-	cmd, ok := info.GetCommand(command)
-	if !ok {
-		log.Fatalf("unknown command: %s", command)
-	}
-	log.Println(cmd.Desc)
-	}
+	info.RunCommand(command)
+}
 }

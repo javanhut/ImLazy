@@ -60,3 +60,22 @@ func (c *Config) PrintCommands() {
 			fmt.Printf("  %-10s %s\n",name,cmd.Desc)
 	}
 }
+
+func (c *Config) RunCommand(name string) {
+	cmd, ok := c.Commands[name]
+	if !ok {
+		log.Fatal(ok)
+	}
+	runCommands := cmd.Run
+	envCommands := cmd.Env
+	if len(envCommands) == 0 {
+		log.Println("No environment variables are set. Skipping")
+	}
+	if len(runCommands) == 0 {
+		log.Fatal("No run commands were found. Must have run commands to run RunCommand")
+	}
+	for _, command := range runCommands {
+		fmt.Println(command)
+	}
+
+}
