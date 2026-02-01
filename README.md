@@ -1,5 +1,24 @@
 # ImLazy - Really just cause i'm lazy
 
+```bash
+_______________                ______ 
+|              |               |    |
+|_____   ______|               |    |
+      |  |                     |    |
+      |  |                     |    |         |-------|
+      |  |       |--|    |--|  |    |         |  |__| |
+      |  |       |   \  /   |  |    |         |       |
+______|  |_____  |    \/    |  |    |_______  |   ___ |
+|              | |  |\  /|  |  |            | |  |  | |
+|______________| |__| \/ |__|  |____________| |__|  |_| [] [] [] [] [] screw it too much effort
+
+```
+
+
+
+
+
+
 # Explaination/ The Why
 I'm just kinda lazy i have been using make for a while for most of my projects thats not a surprise
 However someone mentioned something better than Make and modern and nix etc and im like im not learing another one just to write simple executions
@@ -54,7 +73,7 @@ The toml is pretty simple. The commands go up top like so.
 Each subsequent command is using this format:
 ```toml
 [commands]
-[command.<name_of_command>]
+[commands.<name_of_command>]
 ```
 
 Each command is denoted by the dot notation and will be callable by imlazy when at the root or directory the lazy.toml is at.
@@ -68,7 +87,7 @@ Each command is broken into 4 categories:
 ```
 toml
 [commands]
-[command.example]
+[commands.example]
 desc = "This is an example format"
 run = ["echo 'Run theses commands they are are list of values'"]
 dep =  [""]
