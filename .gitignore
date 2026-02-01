@@ -1,0 +1,6 @@
+# Build output
+imlazy
+
+# ImLazy cache directory (history, if_changed cache)
+.lazy/*
+*/.lazy/*
