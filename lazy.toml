@@ -1,9 +1,7 @@
 [commands]
 [commands.build]
 desc = "Build the project"
-run = [
-"go build -o imlazy"
-]
+run = ["go build -o imlazy"]
   
 [commands.test]
 desc = "Test current project"
@@ -12,3 +10,17 @@ run = ["go test ./..."]
 [commands.example]
 desc = "test that example command is passed to parser"
 run = ["echo Nothing"]
+
+[commands.format]
+desc = "format the core code using go"
+run = ["go fmt ./..."]
+
+[commands.install]
+desc = "Install imlazy to the local bin"
+run = ["mv ./imlazy /usr/local/bin/"]
+dep = ["build"]
+
+
+[commands.uninstall]
+desc = "uninstall imlazy from local bin"
+run = ["rm /usr/local/bin/imlazy"]
