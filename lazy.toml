@@ -1,0 +1,15 @@
+[commands]
+[commands.build]
+desc = "Build the project"
+run = [
+"echo $SHELL",
+"echo done"
+]
+  
+[commands.test]
+desc = "Test current project"
+run = ["go test ./..."]
+
+[commands.example]
+desc = "test that example command is passed to parser"
+run = ["echo Nothing"]
