@@ -7,10 +7,12 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/javanhut/imlazy/completion"
 	"github.com/javanhut/imlazy/output"
 	"github.com/javanhut/imlazy/parser"
+	"github.com/javanhut/imlazy/tui"
 	"github.com/javanhut/imlazy/watcher"
 )
 
@@ -30,6 +32,8 @@ func main() {
 	var showVersion bool
 	var showVersionShort bool
 	var watchMode bool
+	var parallelMode bool
+	var interactiveMode bool
 	var passthrough []string
 
 	// Find -- separator for passthrough args
@@ -65,6 +69,10 @@ func main() {
 			opts.Force = true
 		case "--watch", "-w":
 			watchMode = true
+		case "--parallel", "-p":
+			parallelMode = true
+		case "--interactive", "-i":
+			interactiveMode = true
 		case "--help", "-h":
 			showHelp = true
 		case "--version":
@@ -126,6 +134,40 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Handle interactive mode
+	if interactiveMode {
+		selected, err := tui.RunPicker(info)
+		if err != nil {
+			output.PrintError("Error: %v", err)
+			os.Exit(1)
+		}
+		if selected == "" {
+			return // User cancelled
+		}
+		remainingArgs = []string{selected}
+	}
+
+	// Handle history replay commands
+	// Using "last" and "again" instead of "!!" to avoid bash history expansion conflicts
+	if len(remainingArgs) > 0 {
+		firstArg := remainingArgs[0]
+
+		// "last", "again", or "-" : replay last command
+		if firstArg == "last" || firstArg == "again" || firstArg == "-" {
+			entry, ok := info.GetLastCommand()
+			if !ok {
+				output.PrintError("No command history found")
+				os.Exit(1)
+			}
+			output.PrintInfo("Replaying: %s", entry.Command)
+			// Split command string back into separate args (for multi-command history)
+			remainingArgs = strings.Fields(entry.Command)
+			if len(entry.Args) > 0 {
+				opts.Args = entry.Args
+			}
+		}
+	}
+
 	// Determine command to run
 	if len(remainingArgs) > 0 {
 		command = remainingArgs[0]
@@ -138,18 +180,47 @@ func main() {
 			printHelp(info)
 			return
 		}
-		// No command specified - try default
+		// No command specified - try default or interactive
 		if info.HasDefaultCommand() {
 			command = info.GetDefaultCommand()
+		} else if interactiveMode {
+			return // Already handled above
 		} else {
-			printHelp(info)
-			return
+			// Try interactive mode if available
+			selected, err := tui.RunPicker(info)
+			if err != nil {
+				// TUI not available, show help
+				printHelp(info)
+				return
+			}
+			if selected == "" {
+				return
+			}
+			command = selected
 		}
 	case "help", "how":
 		printHelp(info)
 		return
 	case "validate":
 		runValidate(info)
+		return
+	case "list":
+		// list or list <namespace>
+		if len(remainingArgs) > 1 {
+			namespace := remainingArgs[1]
+			commands := info.ListNamespace(namespace)
+			if len(commands) == 0 {
+				output.PrintInfo("No commands found with namespace '%s'", namespace)
+			} else {
+				fmt.Printf("Commands in namespace '%s':\n", namespace)
+				for _, name := range commands {
+					cmd, _ := info.GetCommand(name)
+					fmt.Printf("  %-20s %s\n", output.Command("%s", name), cmd.Desc)
+				}
+			}
+		} else {
+			info.PrintCommands()
+		}
 		return
 	case "watch":
 		// watch <command> syntax
@@ -167,11 +238,73 @@ func main() {
 		return
 	}
 
-	// Run the command
+	// Expand wildcard patterns (e.g., test:*)
+	var commands []string
+	for _, arg := range remainingArgs {
+		if strings.Contains(arg, "*") {
+			matches := info.MatchWildcard(arg)
+			if len(matches) == 0 {
+				output.PrintError("No commands matching pattern '%s'", arg)
+				os.Exit(1)
+			}
+			commands = append(commands, matches...)
+		} else {
+			commands = append(commands, arg)
+		}
+	}
+
+	// Handle multiple commands
+	if len(commands) > 1 {
+		if !opts.Quiet {
+			mode := "sequentially"
+			if parallelMode {
+				mode = "in parallel"
+			}
+			output.PrintInfo("Running %d commands %s: %s", len(commands), mode, strings.Join(commands, ", "))
+		}
+
+		if err := info.RunMultipleCommands(commands, opts, parallelMode); err != nil {
+			// Record failed execution in history
+			info.AddToHistory(parser.HistoryEntry{
+				Command:   strings.Join(commands, " "),
+				Args:      opts.Args,
+				Timestamp: time.Now(),
+				ExitCode:  1,
+			})
+			output.PrintError("Error: %v", err)
+			os.Exit(1)
+		}
+
+		// Record successful execution in history
+		info.AddToHistory(parser.HistoryEntry{
+			Command:   strings.Join(commands, " "),
+			Args:      opts.Args,
+			Timestamp: time.Now(),
+			ExitCode:  0,
+		})
+		return
+	}
+
+	// Single command execution
 	if err := info.RunCommandWithOptions(command, opts); err != nil {
+		// Record failed execution in history
+		info.AddToHistory(parser.HistoryEntry{
+			Command:   command,
+			Args:      opts.Args,
+			Timestamp: time.Now(),
+			ExitCode:  1,
+		})
 		output.PrintError("Error: %v", err)
 		os.Exit(1)
 	}
+
+	// Record successful execution in history
+	info.AddToHistory(parser.HistoryEntry{
+		Command:   command,
+		Args:      opts.Args,
+		Timestamp: time.Now(),
+		ExitCode:  0,
+	})
 }
 
 func runValidate(info *parser.Config) {
@@ -242,7 +375,7 @@ func printVersion() {
 func printBasicHelp() {
 	fmt.Println("ImLazy - A lazy task runner")
 	fmt.Println()
-	fmt.Println("Usage: imlazy [options] [command] [-- args...]")
+	fmt.Println("Usage: imlazy [options] [command...] [-- args...]")
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  -n, --dry-run      Show commands without executing")
@@ -250,6 +383,8 @@ func printBasicHelp() {
 	fmt.Println("  -V, --verbose      Show detailed output and timing")
 	fmt.Println("  -f, --force        Force execution (ignore if_changed)")
 	fmt.Println("  -w, --watch        Watch files and re-run on changes")
+	fmt.Println("  -p, --parallel     Run multiple commands in parallel")
+	fmt.Println("  -i, --interactive  Open interactive command picker")
 	fmt.Println("  -v, --version      Show version information")
 	fmt.Println("  -h, --help         Show this help message")
 	fmt.Println()
@@ -258,8 +393,10 @@ func printBasicHelp() {
 	fmt.Println("  help, how          Show available commands")
 	fmt.Println("  version            Show version information")
 	fmt.Println("  validate           Validate lazy.toml configuration")
+	fmt.Println("  list [namespace]   List commands (optionally by namespace)")
 	fmt.Println("  watch <cmd>        Watch files and re-run command on changes")
 	fmt.Println("  completion <shell> Generate shell completion (bash, zsh, fish)")
+	fmt.Println("  last, again, -     Replay last command from history")
 	fmt.Println()
 	fmt.Println("No lazy.toml found. Run 'imlazy init' to create one.")
 }
@@ -269,7 +406,7 @@ func printHelp(info *parser.Config) {
 	fmt.Println()
 	fmt.Printf("Config: %s\n", info.ConfigPath())
 	fmt.Println()
-	fmt.Println("Usage: imlazy [options] [command] [-- args...]")
+	fmt.Println("Usage: imlazy [options] [command...] [-- args...]")
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  -n, --dry-run      Show commands without executing")
@@ -277,6 +414,8 @@ func printHelp(info *parser.Config) {
 	fmt.Println("  -V, --verbose      Show detailed output and timing")
 	fmt.Println("  -f, --force        Force execution (ignore if_changed)")
 	fmt.Println("  -w, --watch        Watch files and re-run on changes")
+	fmt.Println("  -p, --parallel     Run multiple commands in parallel")
+	fmt.Println("  -i, --interactive  Open interactive command picker")
 	fmt.Println("  -v, --version      Show version information")
 	fmt.Println("  -h, --help         Show this help message")
 	fmt.Println()
@@ -296,8 +435,10 @@ func printHelp(info *parser.Config) {
 		{"help, how", "Show this help message"},
 		{"version", "Show version information"},
 		{"validate", "Validate lazy.toml configuration"},
+		{"list [ns]", "List commands (optionally by namespace)"},
 		{"watch <cmd>", "Watch files and re-run command on changes"},
 		{"completion", "Generate shell completion (bash, zsh, fish)"},
+		{"last, again", "Replay last command from history"},
 	}
 
 	fmt.Println("Built-in Commands:")
@@ -309,12 +450,17 @@ func printHelp(info *parser.Config) {
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  imlazy build             Run the 'build' command")
+	fmt.Println("  imlazy build test lint   Run multiple commands sequentially")
+	fmt.Println("  imlazy -p build test     Run multiple commands in parallel")
+	fmt.Println("  imlazy test:*            Run all commands starting with 'test:'")
 	fmt.Println("  imlazy -n build          Dry-run: show what would execute")
 	fmt.Println("  imlazy test -- ./pkg     Pass './pkg' to the test command")
 	fmt.Println("  imlazy -V build          Run build with timing info")
 	fmt.Println("  imlazy -w test           Watch and re-run tests on changes")
-	fmt.Println("  imlazy watch build       Same as -w, watch mode for build")
-	fmt.Println("  imlazy                   Run default command (if configured)")
+	fmt.Println("  imlazy -i                Open interactive command picker")
+	fmt.Println("  imlazy last              Replay last command from history")
+	fmt.Println("  imlazy again             Replay last command (alias for last)")
+	fmt.Println("  imlazy                   Run default or open picker")
 
 	// Show aliases if any exist
 	var aliasExamples []string

@@ -1,17 +1,22 @@
 package parser
 
 import (
+	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -23,6 +28,7 @@ type Settings struct {
 	Default  string   `toml:"default"`
 	Parallel bool     `toml:"parallel"`
 	Include  []string `toml:"include"`
+	EnvFile  []string `toml:"env_file"` // Dotenv files to load
 }
 
 // Config represents the full lazy.toml configuration
@@ -37,15 +43,74 @@ type Config struct {
 	aliasMap   map[string]string // Maps aliases to command names
 }
 
+// HistoryEntry represents a command execution in history
+type HistoryEntry struct {
+	Command   string    `json:"command"`
+	Args      []string  `json:"args"`
+	Timestamp time.Time `json:"timestamp"`
+	ExitCode  int       `json:"exit_code"`
+}
+
+// PlatformRun handles both simple run arrays and platform-specific runs
+type PlatformRun struct {
+	Default []string          // Default run commands (from `run = [...]`)
+	ByOS    map[string][]string // Platform-specific (from `run.linux = [...]`)
+}
+
+// UnmarshalTOML implements custom TOML unmarshaling for PlatformRun
+func (p *PlatformRun) UnmarshalTOML(data interface{}) error {
+	p.ByOS = make(map[string][]string)
+
+	switch v := data.(type) {
+	case []interface{}:
+		// Simple array: run = ["cmd1", "cmd2"]
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				p.Default = append(p.Default, s)
+			}
+		}
+	case map[string]interface{}:
+		// Platform-specific: run.linux = [...], run.darwin = [...]
+		for platform, cmds := range v {
+			if arr, ok := cmds.([]interface{}); ok {
+				var commands []string
+				for _, item := range arr {
+					if s, ok := item.(string); ok {
+						commands = append(commands, s)
+					}
+				}
+				p.ByOS[platform] = commands
+			}
+		}
+	}
+	return nil
+}
+
+// GetForCurrentPlatform returns commands for the current OS, falling back to default
+func (p *PlatformRun) GetForCurrentPlatform() []string {
+	if cmds, ok := p.ByOS[runtime.GOOS]; ok {
+		return cmds
+	}
+	return p.Default
+}
+
 // Command represents a single command definition
 type Command struct {
-	Desc      string            `toml:"desc"`
-	Run       []string          `toml:"run"`
-	Env       map[string]string `toml:"env"`
-	Dep       []string          `toml:"dep"`
-	Alias     []string          `toml:"alias"`
-	Watch     []string          `toml:"watch"`
-	IfChanged []string          `toml:"if_changed"`
+	Desc       string            `toml:"desc"`
+	Run        PlatformRun       `toml:"run"`
+	Env        map[string]string `toml:"env"`
+	Dep        []string          `toml:"dep"`
+	Alias      []string          `toml:"alias"`
+	Watch      []string          `toml:"watch"`
+	IfChanged  []string          `toml:"if_changed"`
+	Dir        string            `toml:"dir"`         // Working directory
+	Timeout    string            `toml:"timeout"`     // Timeout duration (e.g., "5m", "30s")
+	Pre        []string          `toml:"pre"`         // Pre-hooks (commands to run before)
+	Post       []string          `toml:"post"`        // Post-hooks (commands to run after, on success)
+	PostAlways bool              `toml:"post_always"` // Run post hooks even on failure
+	Retry      int               `toml:"retry"`       // Number of retry attempts
+	RetryDelay string            `toml:"retry_delay"` // Delay between retries (e.g., "1s")
+	EnvFile    []string          `toml:"env_file"`    // Command-specific dotenv files
 }
 
 // RunOptions holds options for running commands
@@ -315,6 +380,7 @@ func (c *Config) InitialCommand() {
 # default = "build"  # Uncomment to set default command
 # parallel = false   # Enable parallel dependency execution
 # include = ["ci.toml"]  # Include other config files
+# env_file = [".env", ".env.local"]  # Dotenv files to load
 
 [variables]
 # name = "myproject"
@@ -333,6 +399,18 @@ run = ["echo Hello from imlazy!"]
 # env = {}  # Add environment variables here
 # watch = ["**/*.go"]  # Watch patterns for watch mode
 # if_changed = ["src/**/*.go"]  # Only run if these files changed
+# dir = "subdir"  # Working directory for this command
+# timeout = "5m"  # Timeout for command execution
+# pre = ["lint"]  # Commands to run before
+# post = ["notify"]  # Commands to run after (on success)
+# retry = 2  # Number of retries on failure
+# retry_delay = "1s"  # Delay between retries
+
+# Platform-specific commands (use run.linux, run.darwin, run.windows)
+# [commands.build]
+# run.linux = ["go build -o app"]
+# run.darwin = ["go build -o app"]
+# run.windows = ["go build -o app.exe"]
 `
 			if err := os.WriteFile(tomlData, []byte(initialContent), 0644); err != nil {
 				output.PrintError("Failed to create lazy.toml: %v", err)
@@ -381,6 +459,13 @@ func (c *Config) runCommandWithVisited(name string, visiting map[string]bool, op
 
 	cmd, ok := c.Commands[resolvedName]
 	if !ok {
+		// Try fuzzy matching if enabled
+		if match := c.FuzzyMatch(name); match != "" {
+			if !opts.Quiet {
+				output.PrintInfo("Fuzzy matched '%s' to '%s'", name, match)
+			}
+			return c.runCommandWithVisited(match, visiting, opts)
+		}
 		// Provide helpful suggestions
 		suggestions := c.findSimilarCommands(name)
 		if len(suggestions) > 0 {
@@ -389,7 +474,8 @@ func (c *Config) runCommandWithVisited(name string, visiting map[string]bool, op
 		return fmt.Errorf("command not found: '%s'\nRun 'imlazy help' to see available commands", name)
 	}
 
-	runCommands := cmd.Run
+	// Get platform-specific run commands
+	runCommands := cmd.Run.GetForCurrentPlatform()
 	depCommands := cmd.Dep
 
 	if len(runCommands) == 0 {
@@ -408,6 +494,31 @@ func (c *Config) runCommandWithVisited(name string, visiting map[string]bool, op
 				output.PrintInfo("Skipping '%s': no files changed", resolvedName)
 			}
 			return nil
+		}
+	}
+
+	// Load global dotenv files
+	if err := c.loadEnvFiles(c.Settings.EnvFile, opts); err != nil {
+		return fmt.Errorf("failed to load global env files: %w", err)
+	}
+
+	// Load command-specific dotenv files
+	if err := c.loadEnvFiles(cmd.EnvFile, opts); err != nil {
+		return fmt.Errorf("failed to load command env files: %w", err)
+	}
+
+	// Run pre-hooks before dependencies
+	if len(cmd.Pre) > 0 && !opts.IsDependency {
+		for _, hook := range cmd.Pre {
+			if !opts.Quiet {
+				output.PrintHeader("Running pre-hook: %s", hook)
+			}
+			hookOpts := opts
+			hookOpts.Args = nil
+			hookOpts.IsDependency = true
+			if err := c.runCommandWithVisited(hook, visiting, hookOpts); err != nil {
+				return fmt.Errorf("pre-hook '%s' failed for command '%s': %w", hook, resolvedName, err)
+			}
 		}
 	}
 
@@ -467,7 +578,122 @@ func (c *Config) runCommandWithVisited(name string, visiting map[string]bool, op
 		"args": strings.Join(opts.Args, " "),
 	}
 
-	// Execute commands
+	// Handle working directory
+	var originalDir string
+	if cmd.Dir != "" {
+		var err error
+		originalDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+		interpolatedDir := c.interpolateVariables(cmd.Dir, extraVars)
+		// Make relative paths relative to config file
+		if !filepath.IsAbs(interpolatedDir) {
+			interpolatedDir = filepath.Join(c.configDir, interpolatedDir)
+		}
+		if opts.DryRun {
+			if !opts.Quiet {
+				fmt.Printf("[dry-run] cd %s\n", interpolatedDir)
+			}
+		} else {
+			if err := os.Chdir(interpolatedDir); err != nil {
+				return fmt.Errorf("failed to change to directory '%s': %w", interpolatedDir, err)
+			}
+			defer os.Chdir(originalDir)
+		}
+	}
+
+	// Parse timeout if specified
+	var timeout time.Duration
+	if cmd.Timeout != "" {
+		var err error
+		timeout, err = time.ParseDuration(cmd.Timeout)
+		if err != nil {
+			return fmt.Errorf("invalid timeout '%s': %w", cmd.Timeout, err)
+		}
+	}
+
+	// Parse retry delay if specified
+	var retryDelay time.Duration
+	if cmd.RetryDelay != "" {
+		var err error
+		retryDelay, err = time.ParseDuration(cmd.RetryDelay)
+		if err != nil {
+			return fmt.Errorf("invalid retry_delay '%s': %w", cmd.RetryDelay, err)
+		}
+	}
+
+	// Determine max attempts (at least 1)
+	maxAttempts := 1
+	if cmd.Retry > 0 {
+		maxAttempts = cmd.Retry + 1
+	}
+
+	// Execute commands with retry logic
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			if !opts.Quiet {
+				output.PrintWarning("Retry attempt %d/%d for '%s'", attempt, maxAttempts, resolvedName)
+			}
+			if retryDelay > 0 {
+				time.Sleep(retryDelay)
+			}
+		}
+
+		err := c.executeCommands(runCommands, extraVars, timeout, opts)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = err
+
+		if attempt < maxAttempts {
+			if !opts.Quiet {
+				output.PrintWarning("Command failed, will retry: %v", err)
+			}
+		}
+	}
+
+	// Run post-hooks (only on success unless post_always is set)
+	if len(cmd.Post) > 0 && !opts.IsDependency {
+		if lastErr == nil || cmd.PostAlways {
+			for _, hook := range cmd.Post {
+				if !opts.Quiet {
+					output.PrintHeader("Running post-hook: %s", hook)
+				}
+				hookOpts := opts
+				hookOpts.Args = nil
+				hookOpts.IsDependency = true
+				if err := c.runCommandWithVisited(hook, visiting, hookOpts); err != nil {
+					if !opts.Quiet {
+						output.PrintWarning("post-hook '%s' failed: %v", hook, err)
+					}
+				}
+			}
+		}
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	// Update if_changed cache after successful run
+	if len(cmd.IfChanged) > 0 && !opts.DryRun {
+		c.updateIfChangedCache(resolvedName, cmd.IfChanged)
+	}
+
+	// Show timing in verbose mode
+	if opts.Verbose && !opts.Quiet && !opts.DryRun {
+		elapsed := time.Since(startTime)
+		output.PrintSuccess("Completed '%s' in %v", resolvedName, elapsed.Round(time.Millisecond))
+	}
+
+	return nil
+}
+
+// executeCommands runs the command list with optional timeout
+func (c *Config) executeCommands(runCommands []string, extraVars map[string]string, timeout time.Duration, opts RunOptions) error {
 	for _, command := range runCommands {
 		// Interpolate variables in the command
 		interpolatedCmd := c.interpolateVariables(command, extraVars)
@@ -488,37 +714,141 @@ func (c *Config) runCommandWithVisited(name string, visiting map[string]bool, op
 			output.PrintCommand("$ %s", interpolatedCmd)
 		}
 
+		// Create context with timeout if specified
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if timeout > 0 {
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		} else {
+			ctx, cancel = context.WithCancel(context.Background())
+		}
+
 		var cmdline *exec.Cmd
 		switch runtime.GOOS {
 		case "linux", "darwin":
-			cmdline = exec.Command("bash", "-c", interpolatedCmd)
+			cmdline = exec.CommandContext(ctx, "bash", "-c", interpolatedCmd)
 		case "windows":
-			cmdline = exec.Command("cmd", "/C", interpolatedCmd)
+			cmdline = exec.CommandContext(ctx, "cmd", "/C", interpolatedCmd)
 		default:
-			cmdline = exec.Command("bash", "-c", interpolatedCmd)
+			cmdline = exec.CommandContext(ctx, "bash", "-c", interpolatedCmd)
 		}
+
+		// Set process group so we can kill child processes on timeout
+		cmdline.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		cmdline.Stdout = os.Stdout
 		cmdline.Stderr = os.Stderr
 		cmdline.Stdin = os.Stdin
 
-		if err := cmdline.Run(); err != nil {
-			return fmt.Errorf("command failed: '%s'\n%w", interpolatedCmd, err)
+		// Handle interrupt signals
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- cmdline.Run()
+		}()
+
+		select {
+		case err := <-errChan:
+			signal.Stop(sigChan)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("command failed: '%s'\n%w", interpolatedCmd, err)
+			}
+		case <-ctx.Done():
+			// Timeout - kill process group
+			if cmdline.Process != nil {
+				syscall.Kill(-cmdline.Process.Pid, syscall.SIGKILL)
+			}
+			signal.Stop(sigChan)
+			cancel()
+			return fmt.Errorf("command timed out after %v: '%s'", timeout, interpolatedCmd)
+		case sig := <-sigChan:
+			// Interrupt - kill process group
+			if cmdline.Process != nil {
+				syscall.Kill(-cmdline.Process.Pid, syscall.SIGTERM)
+			}
+			signal.Stop(sigChan)
+			cancel()
+			return fmt.Errorf("command interrupted by %v: '%s'", sig, interpolatedCmd)
 		}
 	}
-
-	// Update if_changed cache after successful run
-	if len(cmd.IfChanged) > 0 && !opts.DryRun {
-		c.updateIfChangedCache(resolvedName, cmd.IfChanged)
-	}
-
-	// Show timing in verbose mode
-	if opts.Verbose && !opts.Quiet && !opts.DryRun {
-		elapsed := time.Since(startTime)
-		output.PrintSuccess("Completed '%s' in %v", resolvedName, elapsed.Round(time.Millisecond))
-	}
-
 	return nil
+}
+
+// loadEnvFiles loads environment variables from dotenv files
+func (c *Config) loadEnvFiles(files []string, opts RunOptions) error {
+	for _, file := range files {
+		path := file
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(c.configDir, file)
+		}
+
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// Skip missing env files silently
+			continue
+		}
+
+		if opts.DryRun {
+			if opts.Verbose && !opts.Quiet {
+				fmt.Printf("[dry-run] load env file: %s\n", path)
+			}
+			continue
+		}
+
+		if err := c.loadDotenv(path); err != nil {
+			return fmt.Errorf("failed to load %s: %w", file, err)
+		}
+
+		if opts.Verbose && !opts.Quiet {
+			output.PrintInfo("Loaded env file: %s", file)
+		}
+	}
+	return nil
+}
+
+// loadDotenv parses and loads a dotenv file
+func (c *Config) loadDotenv(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse KEY=value
+		idx := strings.Index(line, "=")
+		if idx == -1 {
+			continue
+		}
+
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+
+		// Remove surrounding quotes if present
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		// Interpolate variables in the value
+		value = c.interpolateVariables(value, nil)
+
+		os.Setenv(key, value)
+	}
+
+	return scanner.Err()
 }
 
 // runDepsParallel runs dependencies in parallel
@@ -790,4 +1120,305 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// FuzzyMatch attempts to find a single close match for a command name using Levenshtein distance
+func (c *Config) FuzzyMatch(name string) string {
+	nameLower := strings.ToLower(name)
+	var bestMatch string
+	bestDistance := -1
+	ambiguous := false
+
+	// Calculate threshold based on name length
+	threshold := 2
+	if len(name) > 5 {
+		threshold = 3
+	}
+
+	for cmdName := range c.Commands {
+		cmdLower := strings.ToLower(cmdName)
+		dist := levenshteinDistance(nameLower, cmdLower)
+
+		if dist <= threshold {
+			if bestDistance == -1 || dist < bestDistance {
+				bestMatch = cmdName
+				bestDistance = dist
+				ambiguous = false
+			} else if dist == bestDistance {
+				ambiguous = true
+			}
+		}
+	}
+
+	// Also check aliases
+	for alias, cmdName := range c.aliasMap {
+		aliasLower := strings.ToLower(alias)
+		dist := levenshteinDistance(nameLower, aliasLower)
+
+		if dist <= threshold {
+			if bestDistance == -1 || dist < bestDistance {
+				bestMatch = cmdName
+				bestDistance = dist
+				ambiguous = false
+			} else if dist == bestDistance && bestMatch != cmdName {
+				ambiguous = true
+			}
+		}
+	}
+
+	// Only return match if unambiguous
+	if ambiguous || bestDistance == -1 {
+		return ""
+	}
+	return bestMatch
+}
+
+// levenshteinDistance calculates the edit distance between two strings
+func levenshteinDistance(a, b string) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+
+	// Create matrix
+	matrix := make([][]int, len(a)+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len(b)+1)
+		matrix[i][0] = i
+	}
+	for j := 0; j <= len(b); j++ {
+		matrix[0][j] = j
+	}
+
+	// Fill matrix
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			matrix[i][j] = min(
+				matrix[i-1][j]+1,      // deletion
+				matrix[i][j-1]+1,      // insertion
+				matrix[i-1][j-1]+cost, // substitution
+			)
+		}
+	}
+
+	return matrix[len(a)][len(b)]
+}
+
+func min(nums ...int) int {
+	m := nums[0]
+	for _, n := range nums[1:] {
+		if n < m {
+			m = n
+		}
+	}
+	return m
+}
+
+// MatchWildcard returns all command names matching a wildcard pattern (e.g., "test:*")
+func (c *Config) MatchWildcard(pattern string) []string {
+	var matches []string
+
+	// Handle namespace wildcard (e.g., "test:*")
+	if strings.HasSuffix(pattern, ":*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		for name := range c.Commands {
+			if strings.HasPrefix(name, prefix) {
+				matches = append(matches, name)
+			}
+		}
+	} else if strings.Contains(pattern, "*") {
+		// General glob pattern
+		for name := range c.Commands {
+			if matched, _ := filepath.Match(pattern, name); matched {
+				matches = append(matches, name)
+			}
+		}
+	}
+
+	// Sort for consistent ordering
+	sort.Strings(matches)
+	return matches
+}
+
+// ListNamespace returns all commands with the given namespace prefix
+func (c *Config) ListNamespace(namespace string) []string {
+	var matches []string
+	prefix := namespace
+	if !strings.HasSuffix(prefix, ":") {
+		prefix += ":"
+	}
+
+	for name := range c.Commands {
+		if strings.HasPrefix(name, prefix) {
+			matches = append(matches, name)
+		}
+	}
+
+	sort.Strings(matches)
+	return matches
+}
+
+// GetHistory returns recent command history
+func (c *Config) GetHistory(limit int) ([]HistoryEntry, error) {
+	historyFile := filepath.Join(c.configDir, ".lazy", "history.json")
+
+	data, err := os.ReadFile(historyFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []HistoryEntry{}, nil
+		}
+		return nil, err
+	}
+
+	var history []HistoryEntry
+	if err := json.Unmarshal(data, &history); err != nil {
+		return nil, err
+	}
+
+	if limit > 0 && len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+
+	return history, nil
+}
+
+// AddToHistory adds a command execution to history
+func (c *Config) AddToHistory(entry HistoryEntry) error {
+	cacheDir := filepath.Join(c.configDir, ".lazy")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return err
+	}
+
+	historyFile := filepath.Join(cacheDir, "history.json")
+
+	// Load existing history
+	var history []HistoryEntry
+	if data, err := os.ReadFile(historyFile); err == nil {
+		json.Unmarshal(data, &history)
+	}
+
+	// Add new entry
+	history = append(history, entry)
+
+	// Keep only last 100 entries
+	if len(history) > 100 {
+		history = history[len(history)-100:]
+	}
+
+	// Save
+	data, err := json.MarshalIndent(history, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(historyFile, data, 0644)
+}
+
+// GetLastCommand returns the last executed command from history
+func (c *Config) GetLastCommand() (HistoryEntry, bool) {
+	history, err := c.GetHistory(1)
+	if err != nil || len(history) == 0 {
+		return HistoryEntry{}, false
+	}
+	return history[0], true
+}
+
+// FindHistoryByPrefix finds the most recent command starting with prefix
+func (c *Config) FindHistoryByPrefix(prefix string) (HistoryEntry, bool) {
+	history, err := c.GetHistory(100)
+	if err != nil {
+		return HistoryEntry{}, false
+	}
+
+	// Search from most recent
+	for i := len(history) - 1; i >= 0; i-- {
+		if strings.HasPrefix(history[i].Command, prefix) {
+			return history[i], true
+		}
+	}
+
+	return HistoryEntry{}, false
+}
+
+// RunMultipleCommands runs multiple commands sequentially or in parallel
+func (c *Config) RunMultipleCommands(commands []string, opts RunOptions, parallel bool) error {
+	if parallel {
+		return c.runCommandsParallel(commands, opts)
+	}
+
+	// Sequential execution
+	for _, cmd := range commands {
+		if err := c.RunCommandWithOptions(cmd, opts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runCommandsParallel runs commands in parallel
+func (c *Config) runCommandsParallel(commands []string, opts RunOptions) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(commands))
+
+	for _, cmd := range commands {
+		wg.Add(1)
+		go func(cmdName string) {
+			defer wg.Done()
+			if err := c.RunCommandWithOptions(cmdName, opts); err != nil {
+				errChan <- fmt.Errorf("command '%s' failed: %w", cmdName, err)
+			}
+		}(cmd)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Return first error if any
+	for err := range errChan {
+		return err
+	}
+
+	return nil
+}
+
+// GetCommandNames returns all command names (for TUI)
+func (c *Config) GetCommandNames() []string {
+	var names []string
+	for name := range c.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// GetCommandInfo returns command info for display
+type CommandInfo struct {
+	Name        string
+	Description string
+	Aliases     []string
+	Run         []string
+}
+
+// GetCommandsInfo returns info about all commands (for TUI)
+func (c *Config) GetCommandsInfo() []CommandInfo {
+	var infos []CommandInfo
+	for name, cmd := range c.Commands {
+		infos = append(infos, CommandInfo{
+			Name:        name,
+			Description: cmd.Desc,
+			Aliases:     cmd.Alias,
+			Run:         cmd.Run.GetForCurrentPlatform(),
+		})
+	}
+	// Sort by name
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].Name < infos[j].Name
+	})
+	return infos
 }

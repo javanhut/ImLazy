@@ -1,3 +1,0 @@
-{
-  "build:**/*.go,go.mod,go.sum": "9e2224c7adeae2a6055681ce35e86a45842e4b185f97d8095497737e9851de26"
-}
