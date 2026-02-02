@@ -13,9 +13,12 @@ Or clone it and build it yourself like some kind of artisan:
 ```bash
 git clone https://github.com/javanhut/imlazy
 cd imlazy
-go build -o imlazy
-sudo mv imlazy /usr/local/bin/
+# Lazy install it 
+go run main.go install
 ```
+s*@!... probably use sudo ^ if it doesn't install
+
+
 
 ## Setup
 
