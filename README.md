@@ -1,6 +1,6 @@
 # ImLazy
 
-```
+```bash
 _______________                ______
 |              |               |    |
 |_____   ______|               |    |
@@ -36,8 +36,9 @@ Or:
 ```bash
 git clone https://github.com/javanhut/imlazy
 cd imlazy
-go build && sudo mv imlazy /usr/local/bin/
+go run main.go install
 ```
+if you're too lazy to move it its in its own lazy.toml i used the lazy to control the lazy.
 
 ## Quick Start
 
