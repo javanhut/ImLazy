@@ -733,45 +733,56 @@ func (c *Config) executeCommands(runCommands []string, extraVars map[string]stri
 			cmdline = exec.CommandContext(ctx, "bash", "-c", interpolatedCmd)
 		}
 
-		// Set process group so we can kill child processes on timeout
-		cmdline.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
 		cmdline.Stdout = os.Stdout
 		cmdline.Stderr = os.Stderr
 		cmdline.Stdin = os.Stdin
 
-		// Handle interrupt signals
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		if timeout > 0 {
+			// Use a separate process group so we can kill the whole group on timeout
+			cmdline.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-		errChan := make(chan error, 1)
-		go func() {
-			errChan <- cmdline.Run()
-		}()
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-		select {
-		case err := <-errChan:
-			signal.Stop(sigChan)
+			errChan := make(chan error, 1)
+			go func() {
+				errChan <- cmdline.Run()
+			}()
+
+			select {
+			case err := <-errChan:
+				signal.Stop(sigChan)
+				cancel()
+				if err != nil {
+					return fmt.Errorf("command failed: '%s'\n%w", interpolatedCmd, err)
+				}
+			case <-ctx.Done():
+				// Timeout - kill process group
+				if cmdline.Process != nil {
+					syscall.Kill(-cmdline.Process.Pid, syscall.SIGKILL)
+				}
+				signal.Stop(sigChan)
+				cancel()
+				return fmt.Errorf("command timed out after %v: '%s'", timeout, interpolatedCmd)
+			case sig := <-sigChan:
+				// Interrupt - forward signal to process group and wait for exit
+				if cmdline.Process != nil {
+					syscall.Kill(-cmdline.Process.Pid, syscall.SIGTERM)
+				}
+				signal.Stop(sigChan)
+				// Wait for the child to actually exit
+				<-errChan
+				cancel()
+				return fmt.Errorf("command interrupted by %v: '%s'", sig, interpolatedCmd)
+			}
+		} else {
+			// No timeout: run directly without Setpgid so signals flow
+			// naturally to the child process (important for interactive commands)
+			err := cmdline.Run()
 			cancel()
 			if err != nil {
 				return fmt.Errorf("command failed: '%s'\n%w", interpolatedCmd, err)
 			}
-		case <-ctx.Done():
-			// Timeout - kill process group
-			if cmdline.Process != nil {
-				syscall.Kill(-cmdline.Process.Pid, syscall.SIGKILL)
-			}
-			signal.Stop(sigChan)
-			cancel()
-			return fmt.Errorf("command timed out after %v: '%s'", timeout, interpolatedCmd)
-		case sig := <-sigChan:
-			// Interrupt - kill process group
-			if cmdline.Process != nil {
-				syscall.Kill(-cmdline.Process.Pid, syscall.SIGTERM)
-			}
-			signal.Stop(sigChan)
-			cancel()
-			return fmt.Errorf("command interrupted by %v: '%s'", sig, interpolatedCmd)
 		}
 	}
 	return nil
