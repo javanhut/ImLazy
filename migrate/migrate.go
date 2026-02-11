@@ -1,3 +1,4 @@
+// Package migrate converts Makefiles into ImLazy lazy.toml configuration files.
 package migrate
 
 import (

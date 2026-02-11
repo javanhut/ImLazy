@@ -1,3 +1,4 @@
+// Package watcher provides file change detection and automatic command re-execution.
 package watcher
 
 import (
@@ -18,8 +19,6 @@ type Watcher struct {
 	callback     func() error
 	watcher      *fsnotify.Watcher
 	done         chan struct{}
-	mu           sync.Mutex
-	lastEvent    time.Time
 }
 
 // NewWatcher creates a new file watcher
@@ -97,6 +96,8 @@ func (w *Watcher) Start() error {
 	return nil
 }
 
+// watch is the main event loop that listens for file system events and
+// triggers the callback with debouncing.
 func (w *Watcher) watch() {
 	var timer *time.Timer
 	var timerMu sync.Mutex
@@ -144,7 +145,8 @@ func (w *Watcher) watch() {
 	}
 }
 
-// matchesPattern checks if a file path matches any of the watch patterns
+// matchesPattern checks if a file path matches any of the configured watch patterns,
+// supporting both simple globs and ** recursive patterns.
 func (w *Watcher) matchesPattern(path string) bool {
 	cwd, _ := os.Getwd()
 	relPath, err := filepath.Rel(cwd, path)

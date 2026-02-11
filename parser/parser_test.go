@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,7 +104,6 @@ func TestBuildAliasMap(t *testing.T) {
 		})
 	}
 
-	// Check format has no aliases
 	if _, ok := cfg.aliasMap["format"]; ok {
 		t.Error("format should not be in alias map")
 	}
@@ -145,19 +146,16 @@ func TestGetCommand(t *testing.T) {
 	}
 	cfg.buildAliasMap()
 
-	// Direct lookup
 	cmd, ok := cfg.GetCommand("build")
 	if !ok || cmd.Desc != "Build" {
 		t.Errorf("GetCommand(build) failed")
 	}
 
-	// Alias lookup
 	cmd, ok = cfg.GetCommand("b")
 	if !ok || cmd.Desc != "Build" {
 		t.Errorf("GetCommand(b) failed")
 	}
 
-	// Unknown command
 	_, ok = cfg.GetCommand("unknown")
 	if ok {
 		t.Errorf("GetCommand(unknown) should return false")
@@ -212,7 +210,7 @@ func TestValidateCircularDependencies(t *testing.T) {
 
 			hasCircularError := false
 			for _, err := range errors {
-				if containsSubstring(err, "circular") {
+				if strings.Contains(err, "circular") {
 					hasCircularError = true
 					break
 				}
@@ -243,7 +241,7 @@ func TestValidateUndefinedDependencies(t *testing.T) {
 
 	hasUndefinedError := false
 	for _, err := range errors {
-		if containsSubstring(err, "undefined dependency") {
+		if strings.Contains(err, "undefined dependency") {
 			hasUndefinedError = true
 			break
 		}
@@ -257,7 +255,7 @@ func TestValidateDuplicateAliases(t *testing.T) {
 	cfg := &Config{
 		Commands: map[string]Command{
 			"build": {Alias: []string{"b"}},
-			"test":  {Alias: []string{"b"}}, // duplicate
+			"test":  {Alias: []string{"b"}},
 		},
 	}
 	cfg.buildAliasMap()
@@ -265,7 +263,7 @@ func TestValidateDuplicateAliases(t *testing.T) {
 	errors := cfg.Validate()
 	hasDuplicateError := false
 	for _, err := range errors {
-		if containsSubstring(err, "multiple commands") {
+		if strings.Contains(err, "multiple commands") {
 			hasDuplicateError = true
 			break
 		}
@@ -287,7 +285,7 @@ func TestValidateDefaultCommand(t *testing.T) {
 	errors := cfg.Validate()
 	hasDefaultError := false
 	for _, err := range errors {
-		if containsSubstring(err, "default command") {
+		if strings.Contains(err, "default command") {
 			hasDefaultError = true
 			break
 		}
@@ -314,11 +312,11 @@ func TestFindSimilarCommands(t *testing.T) {
 		input         string
 		shouldContain string
 	}{
-		{"buid", "build"}, // typo
-		{"buil", "build"}, // prefix
-		{"fm", "format"},  // partial alias
-		{"tes", "test"},   // prefix
-		{"xyz", ""},       // no match
+		{"buid", "build"},
+		{"buil", "build"},
+		{"fm", "format"},
+		{"tes", "test"},
+		{"xyz", ""},
 	}
 
 	for _, tt := range tests {
@@ -367,14 +365,12 @@ func TestMatchGlobPattern(t *testing.T) {
 }
 
 func TestReadTomlWithIncludes(t *testing.T) {
-	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "imlazy-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create main config
 	mainConfig := `
 [settings]
 include = ["extra.toml"]
@@ -387,7 +383,6 @@ run = ["echo build"]
 		t.Fatal(err)
 	}
 
-	// Create included config
 	extraConfig := `
 [commands.test]
 desc = "Extra test"
@@ -397,19 +392,15 @@ run = ["echo test"]
 		t.Fatal(err)
 	}
 
-	// Change to temp directory
 	oldWd, _ := os.Getwd()
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
 
-	// Read config
-	cfg := &Config{}
-	result, err := cfg.ReadToml()
+	result, err := LoadConfig()
 	if err != nil {
-		t.Fatalf("ReadToml() error: %v", err)
+		t.Fatalf("LoadConfig() error: %v", err)
 	}
 
-	// Check both commands exist
 	if _, ok := result.Commands["build"]; !ok {
 		t.Error("expected 'build' command from main config")
 	}
@@ -419,14 +410,12 @@ run = ["echo test"]
 }
 
 func TestReadTomlCircularInclude(t *testing.T) {
-	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "imlazy-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create configs that include each other
 	config1 := `
 [settings]
 include = ["b.toml"]
@@ -442,18 +431,15 @@ include = ["lazy.toml"]
 		t.Fatal(err)
 	}
 
-	// Change to temp directory
 	oldWd, _ := os.Getwd()
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
 
-	// Read config - should error
-	cfg := &Config{}
-	_, err = cfg.ReadToml()
+	_, err = LoadConfig()
 	if err == nil {
 		t.Error("expected error for circular include")
 	}
-	if !containsSubstring(err.Error(), "circular") {
+	if !strings.Contains(err.Error(), "circular") {
 		t.Errorf("expected circular include error, got: %v", err)
 	}
 }
@@ -484,23 +470,7 @@ func TestRunOptions(t *testing.T) {
 	}
 }
 
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// Test PlatformRun functionality
 func TestPlatformRunUnmarshal(t *testing.T) {
-	// Test simple array
 	p := &PlatformRun{}
 	err := p.UnmarshalTOML([]interface{}{"echo hello", "echo world"})
 	if err != nil {
@@ -513,7 +483,6 @@ func TestPlatformRunUnmarshal(t *testing.T) {
 		t.Errorf("expected 'echo hello', got %q", p.Default[0])
 	}
 
-	// Test platform-specific map
 	p2 := &PlatformRun{}
 	err = p2.UnmarshalTOML(map[string]interface{}{
 		"linux":   []interface{}{"linux-cmd"},
@@ -546,7 +515,6 @@ func TestPlatformRunGetForCurrentPlatform(t *testing.T) {
 		t.Error("GetForCurrentPlatform returned empty")
 	}
 
-	// Test fallback to default
 	p2 := &PlatformRun{
 		Default: []string{"default-cmd"},
 		ByOS:    map[string][]string{},
@@ -557,7 +525,6 @@ func TestPlatformRunGetForCurrentPlatform(t *testing.T) {
 	}
 }
 
-// Test Levenshtein distance
 func TestLevenshteinDistance(t *testing.T) {
 	tests := []struct {
 		a, b     string
@@ -583,7 +550,6 @@ func TestLevenshteinDistance(t *testing.T) {
 	}
 }
 
-// Test FuzzyMatch
 func TestFuzzyMatch(t *testing.T) {
 	cfg := &Config{
 		Commands: map[string]Command{
@@ -605,13 +571,13 @@ func TestFuzzyMatch(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"bild", "build"},    // 1 edit distance
-		{"tset", "test"},     // 2 edit distance
-		{"formta", "format"}, // 2 edit distance - within threshold
-		{"xyz", ""},          // no match
-		{"bui", "build"},     // close to build
-		{"tes", "test"},      // close to test
-		{"deploye", "deploy"},// 1 edit distance
+		{"bild", "build"},
+		{"tset", "test"},
+		{"formta", "format"},
+		{"xyz", ""},
+		{"bui", "build"},
+		{"tes", "test"},
+		{"deploye", "deploy"},
 	}
 
 	for _, tt := range tests {
@@ -624,7 +590,6 @@ func TestFuzzyMatch(t *testing.T) {
 	}
 }
 
-// Test Wildcard matching
 func TestMatchWildcard(t *testing.T) {
 	cfg := &Config{
 		Commands: map[string]Command{
@@ -663,7 +628,6 @@ func TestMatchWildcard(t *testing.T) {
 	}
 }
 
-// Test ListNamespace
 func TestListNamespace(t *testing.T) {
 	cfg := &Config{
 		Commands: map[string]Command{
@@ -695,23 +659,19 @@ func TestListNamespace(t *testing.T) {
 	}
 }
 
-// Test History functions
 func TestHistory(t *testing.T) {
-	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "imlazy-history-test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	cfg := &Config{
-		configDir: tmpDir,
-	}
+	store := NewHistoryStore(tmpDir)
 
 	// Initially empty
-	history, err := cfg.GetHistory(10)
+	history, err := store.Get(10)
 	if err != nil {
-		t.Fatalf("GetHistory error: %v", err)
+		t.Fatalf("Get error: %v", err)
 	}
 	if len(history) != 0 {
 		t.Error("expected empty history")
@@ -725,49 +685,48 @@ func TestHistory(t *testing.T) {
 	}
 
 	for _, e := range entries {
-		if err := cfg.AddToHistory(e); err != nil {
-			t.Fatalf("AddToHistory error: %v", err)
+		if err := store.Add(e); err != nil {
+			t.Fatalf("Add error: %v", err)
 		}
 	}
 
 	// Get all history
-	history, err = cfg.GetHistory(10)
+	history, err = store.Get(10)
 	if err != nil {
-		t.Fatalf("GetHistory error: %v", err)
+		t.Fatalf("Get error: %v", err)
 	}
 	if len(history) != 3 {
 		t.Errorf("expected 3 history entries, got %d", len(history))
 	}
 
 	// Get last command
-	last, ok := cfg.GetLastCommand()
+	last, ok := store.GetLast()
 	if !ok {
-		t.Error("GetLastCommand returned false")
+		t.Error("GetLast returned false")
 	}
 	if last.Command != "test:unit" {
-		t.Errorf("GetLastCommand returned %q, want 'test:unit'", last.Command)
+		t.Errorf("GetLast returned %q, want 'test:unit'", last.Command)
 	}
 
 	// Find by prefix
-	found, ok := cfg.FindHistoryByPrefix("test")
+	found, ok := store.FindByPrefix("test")
 	if !ok {
-		t.Error("FindHistoryByPrefix returned false")
+		t.Error("FindByPrefix returned false")
 	}
 	if found.Command != "test:unit" {
-		t.Errorf("FindHistoryByPrefix returned %q, want 'test:unit'", found.Command)
+		t.Errorf("FindByPrefix returned %q, want 'test:unit'", found.Command)
 	}
 
 	// Find by prefix - build
-	found, ok = cfg.FindHistoryByPrefix("build")
+	found, ok = store.FindByPrefix("build")
 	if !ok {
-		t.Error("FindHistoryByPrefix(build) returned false")
+		t.Error("FindByPrefix(build) returned false")
 	}
 	if found.Command != "build" {
-		t.Errorf("FindHistoryByPrefix(build) returned %q, want 'build'", found.Command)
+		t.Errorf("FindByPrefix(build) returned %q, want 'build'", found.Command)
 	}
 }
 
-// Test GetCommandsInfo
 func TestGetCommandsInfo(t *testing.T) {
 	cfg := &Config{
 		Commands: map[string]Command{
@@ -792,7 +751,6 @@ func TestGetCommandsInfo(t *testing.T) {
 		t.Errorf("expected 2 command infos, got %d", len(infos))
 	}
 
-	// Check sorted order
 	if infos[0].Name != "build" {
 		t.Errorf("expected first command to be 'build', got %q", infos[0].Name)
 	}
@@ -800,7 +758,6 @@ func TestGetCommandsInfo(t *testing.T) {
 		t.Errorf("expected second command to be 'test', got %q", infos[1].Name)
 	}
 
-	// Check fields
 	if infos[0].Description != "Build the project" {
 		t.Errorf("wrong description for build")
 	}
@@ -809,7 +766,6 @@ func TestGetCommandsInfo(t *testing.T) {
 	}
 }
 
-// Test parsing of new TOML fields
 func TestParseNewConfigFields(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "imlazy-newfields-test")
 	if err != nil {
@@ -840,18 +796,15 @@ env_file = [".env.build"]
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
 
-	cfg := &Config{}
-	result, err := cfg.ReadToml()
+	result, err := LoadConfig()
 	if err != nil {
-		t.Fatalf("ReadToml error: %v", err)
+		t.Fatalf("LoadConfig error: %v", err)
 	}
 
-	// Check settings
 	if len(result.Settings.EnvFile) != 2 {
 		t.Errorf("expected 2 env files in settings, got %d", len(result.Settings.EnvFile))
 	}
 
-	// Check command
 	cmd, ok := result.Commands["build"]
 	if !ok {
 		t.Fatal("build command not found")
@@ -880,7 +833,6 @@ env_file = [".env.build"]
 	}
 }
 
-// Test platform-specific TOML parsing
 func TestParsePlatformSpecificRun(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "imlazy-platform-test")
 	if err != nil {
@@ -908,13 +860,11 @@ run = ["echo hello"]
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
 
-	cfg := &Config{}
-	result, err := cfg.ReadToml()
+	result, err := LoadConfig()
 	if err != nil {
-		t.Fatalf("ReadToml error: %v", err)
+		t.Fatalf("LoadConfig error: %v", err)
 	}
 
-	// Check platform-specific
 	buildCmd, ok := result.Commands["build"]
 	if !ok {
 		t.Fatal("build command not found")
@@ -926,7 +876,6 @@ run = ["echo hello"]
 		t.Error("linux commands not parsed")
 	}
 
-	// Check simple command
 	simpleCmd, ok := result.Commands["simple"]
 	if !ok {
 		t.Fatal("simple command not found")
@@ -936,7 +885,6 @@ run = ["echo hello"]
 	}
 }
 
-// Test dotenv parsing
 func TestLoadDotenv(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "imlazy-dotenv-test")
 	if err != nil {
@@ -961,7 +909,6 @@ WITH_SPACES = value with spaces
 		configDir: tmpDir,
 	}
 
-	// Clear any existing values
 	os.Unsetenv("DATABASE_URL")
 	os.Unsetenv("API_KEY")
 	os.Unsetenv("DEBUG")
@@ -986,5 +933,48 @@ WITH_SPACES = value with spaces
 				t.Errorf("os.Getenv(%q) = %q, want %q", tt.key, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestResolveCommand(t *testing.T) {
+	cfg := &Config{
+		Commands: map[string]Command{
+			"build":  {Desc: "Build", Alias: []string{"b"}, Run: PlatformRun{Default: []string{"go build"}}},
+			"test":   {Desc: "Test", Run: PlatformRun{Default: []string{"go test"}}},
+			"format": {Desc: "Format", Run: PlatformRun{Default: []string{"gofmt"}}},
+		},
+	}
+	cfg.buildAliasMap()
+	runner := NewRunner(cfg)
+
+	// Direct name
+	name, cmd, err := runner.resolveCommand("build", RunOptions{})
+	if err != nil {
+		t.Fatalf("resolveCommand(build) error: %v", err)
+	}
+	if name != "build" || cmd.Desc != "Build" {
+		t.Errorf("resolveCommand(build) = %q, %q", name, cmd.Desc)
+	}
+
+	// Alias
+	name, cmd, err = runner.resolveCommand("b", RunOptions{})
+	if err != nil {
+		t.Fatalf("resolveCommand(b) error: %v", err)
+	}
+	if name != "build" || cmd.Desc != "Build" {
+		t.Errorf("resolveCommand(b) = %q, %q", name, cmd.Desc)
+	}
+
+	// Unknown command
+	_, _, err = runner.resolveCommand("nonexistent_xyz", RunOptions{})
+	if err == nil {
+		t.Error("expected error for unknown command")
+	}
+}
+
+func TestBuildCommand(t *testing.T) {
+	cmd := buildCommand(context.Background(), "echo hello")
+	if cmd == nil {
+		t.Fatal("buildCommand returned nil")
 	}
 }

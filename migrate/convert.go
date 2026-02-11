@@ -29,6 +29,7 @@ func ConvertToTOML(ir *MakefileIR) string {
 	return b.String()
 }
 
+// writeSettings writes the [settings] section to the TOML output.
 func writeSettings(b *strings.Builder, ir *MakefileIR) {
 	b.WriteString("[settings]\n")
 	if ir.DefaultGoal != "" {
@@ -38,6 +39,7 @@ func writeSettings(b *strings.Builder, ir *MakefileIR) {
 	b.WriteString("\n")
 }
 
+// writeVariables writes the [variables] section with non-exported Make variables.
 func writeVariables(b *strings.Builder, ir *MakefileIR) {
 	vars := filterVars(ir.Variables, false)
 	if len(vars) == 0 {
@@ -53,6 +55,7 @@ func writeVariables(b *strings.Builder, ir *MakefileIR) {
 	b.WriteString("\n")
 }
 
+// writeEnv writes the [env] section with exported Make variables.
 func writeEnv(b *strings.Builder, ir *MakefileIR) {
 	vars := filterVars(ir.Variables, true)
 	if len(vars) == 0 {
@@ -67,6 +70,7 @@ func writeEnv(b *strings.Builder, ir *MakefileIR) {
 	b.WriteString("\n")
 }
 
+// writeCommands writes the [commands] section, converting Make targets to ImLazy commands.
 func writeCommands(b *strings.Builder, ir *MakefileIR) {
 	// Build set of target names for dependency resolution
 	targetNames := make(map[string]bool)
@@ -116,6 +120,7 @@ func writeCommands(b *strings.Builder, ir *MakefileIR) {
 	}
 }
 
+// writeWarnings appends migration warnings as TOML comments at the end of the output.
 func writeWarnings(b *strings.Builder, ir *MakefileIR) {
 	if len(ir.Warnings) == 0 {
 		return

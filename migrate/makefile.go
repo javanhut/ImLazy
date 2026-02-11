@@ -62,6 +62,7 @@ func ParseMakefile(path string) (*MakefileIR, error) {
 	return parseMakefileWithVisited(path, make(map[string]bool))
 }
 
+// parseMakefileWithVisited parses a Makefile, tracking visited paths to detect circular includes.
 func parseMakefileWithVisited(path string, visited map[string]bool) (*MakefileIR, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
