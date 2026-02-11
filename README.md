@@ -78,6 +78,7 @@ Done.
 - **Dotenv support** - load `.env` files
 - **Timeouts & retries** - for flaky stuff
 - **Namespacing** - `test:unit`, `test:e2e`, run with `test:*`
+- **Makefile migration** - auto-convert Makefiles to `lazy.toml`
 
 ## Documentation
 

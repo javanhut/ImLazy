@@ -35,6 +35,7 @@ These work without a `lazy.toml`:
 | `list [namespace]` | List available commands |
 | `watch <cmd>` | Watch mode for a command |
 | `completion <shell>` | Generate shell completions |
+| `migrate` | Convert a Makefile to `lazy.toml` |
 | `last` / `again` / `-` | Replay last command from history |
 
 ## Running Commands
@@ -241,6 +242,62 @@ imlazy last
 # Wildcard
 imlazy test:*
 ```
+
+## Makefile Migration
+
+Convert a Makefile to `lazy.toml`:
+
+```bash
+imlazy migrate
+```
+
+Auto-discovers `Makefile`, `makefile`, or `GNUmakefile` in the current directory.
+
+### Migrate Flags
+
+| Flag | What it does |
+|------|-------------|
+| `--source=<path>` | Use a specific Makefile instead of auto-discovering |
+| `--output=<path>` | Write to a custom path (default: `lazy.toml`) |
+| `--force` | Overwrite an existing `lazy.toml` |
+| `--dry-run` / `-n` | Print the generated TOML to stdout without writing |
+| `--verbose` / `-V` | Show conversion details (variable/target counts, warnings) |
+
+### What Gets Converted
+
+- **Variables** become `[variables]` (lowercase) or `[env]` (exported)
+- **Targets** become `[commands.<name>]` with recipe lines as the `run` array
+- **Prerequisites** that are also targets become `dep` entries
+- **Comments** above targets become `desc` fields
+- **`.DEFAULT_GOAL`** becomes `settings.default`
+- **`.PHONY`** and other special targets are skipped
+
+### Examples
+
+```bash
+# Preview without writing
+imlazy migrate --dry-run
+
+# Migrate a specific file
+imlazy migrate --source=build/Makefile
+
+# Overwrite existing lazy.toml
+imlazy migrate --force
+
+# Verbose output
+imlazy migrate -V
+```
+
+### Warnings
+
+Some Makefile constructs can't be converted 1:1. The migration emits warnings as TOML comments at the end of the generated file for things like:
+
+- `include` directives
+- Conditional blocks (`ifeq`/`ifdef`)
+- Shell functions (`$(shell ...)`)
+- Complex variable assignments (`:=`, `?=`, `+=`)
+
+Review the generated file and adjust as needed.
 
 ## Exit Codes
 
