@@ -1,3 +1,8 @@
+// Package output provides colored terminal output formatting for ImLazy.
+//
+// Color support is auto-detected via the NO_COLOR environment variable and
+// whether stdout is a terminal. Note that PrintError writes to stderr, but
+// color detection is based on stdout.
 package output
 
 import (

@@ -1,0 +1,331 @@
+package migrate
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestParseArgs(t *testing.T) {
+	args := []string{"--source=MyMakefile", "--output=out.toml", "--force", "--dry-run", "--verbose"}
+	opts := ParseArgs(args)
+
+	if opts.SourcePath != "MyMakefile" {
+		t.Errorf("SourcePath: got %q", opts.SourcePath)
+	}
+	if opts.OutputPath != "out.toml" {
+		t.Errorf("OutputPath: got %q", opts.OutputPath)
+	}
+	if !opts.Force {
+		t.Error("Force should be true")
+	}
+	if !opts.DryRun {
+		t.Error("DryRun should be true")
+	}
+	if !opts.Verbose {
+		t.Error("Verbose should be true")
+	}
+}
+
+func TestParseArgsDefaults(t *testing.T) {
+	opts := ParseArgs(nil)
+
+	if opts.SourcePath != "" {
+		t.Errorf("SourcePath should be empty, got %q", opts.SourcePath)
+	}
+	if opts.OutputPath != "" {
+		t.Errorf("OutputPath should be empty, got %q", opts.OutputPath)
+	}
+	if opts.Force {
+		t.Error("Force should be false")
+	}
+}
+
+func TestParseArgsShortFlags(t *testing.T) {
+	opts := ParseArgs([]string{"-n", "-V"})
+	if !opts.DryRun {
+		t.Error("DryRun should be true with -n")
+	}
+	if !opts.Verbose {
+		t.Error("Verbose should be true with -V")
+	}
+}
+
+func TestDiscoverSource(t *testing.T) {
+	// Create a temp directory with a Makefile
+	dir := t.TempDir()
+	makefile := filepath.Join(dir, "Makefile")
+	os.WriteFile(makefile, []byte("all:\n\techo hi\n"), 0644)
+
+	// Change to temp dir for auto-discovery
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	path, err := discoverSource("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "Makefile" {
+		t.Errorf("got %q", path)
+	}
+}
+
+func TestDiscoverSourceExplicit(t *testing.T) {
+	dir := t.TempDir()
+	custom := filepath.Join(dir, "MyMakefile")
+	os.WriteFile(custom, []byte("all:\n\techo hi\n"), 0644)
+
+	path, err := discoverSource(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != custom {
+		t.Errorf("got %q, want %q", path, custom)
+	}
+}
+
+func TestDiscoverSourceNotFound(t *testing.T) {
+	dir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	_, err := discoverSource("")
+	if err == nil {
+		t.Error("expected error when no Makefile exists")
+	}
+}
+
+func TestDiscoverSourcePriority(t *testing.T) {
+	dir := t.TempDir()
+	// Create both "Makefile" and "makefile" — "Makefile" should win
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte("all:\n\techo Makefile\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "makefile"), []byte("all:\n\techo makefile\n"), 0644)
+
+	oldDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldDir)
+
+	path, err := discoverSource("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "Makefile" {
+		t.Errorf("got %q, want 'Makefile'", filepath.Base(path))
+	}
+}
+
+func TestRunDryRun(t *testing.T) {
+	dir := t.TempDir()
+	makefile := filepath.Join(dir, "Makefile")
+	content := `.PHONY: build test
+
+CC = gcc
+
+# Build the project
+build:
+	$(CC) -o app main.c
+
+# Run tests
+test: build
+	./run_tests.sh
+`
+	os.WriteFile(makefile, []byte(content), 0644)
+
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := Run(MigrateOptions{
+		SourcePath: makefile,
+		DryRun:     true,
+	})
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	if !strings.Contains(output, "[commands.build]") {
+		t.Error("dry run output should contain build command")
+	}
+	if !strings.Contains(output, "[commands.test]") {
+		t.Error("dry run output should contain test command")
+	}
+}
+
+func TestRunWriteFile(t *testing.T) {
+	dir := t.TempDir()
+	makefile := filepath.Join(dir, "Makefile")
+	os.WriteFile(makefile, []byte(".PHONY: build\nbuild:\n\tgo build\n"), 0644)
+
+	outputPath := filepath.Join(dir, "lazy.toml")
+	err := Run(MigrateOptions{
+		SourcePath: makefile,
+		OutputPath: outputPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify file exists
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "[commands.build]") {
+		t.Error("written file should contain build command")
+	}
+}
+
+func TestRunNoOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	makefile := filepath.Join(dir, "Makefile")
+	os.WriteFile(makefile, []byte("build:\n\tgo build\n"), 0644)
+
+	outputPath := filepath.Join(dir, "lazy.toml")
+	os.WriteFile(outputPath, []byte("existing content"), 0644)
+
+	err := Run(MigrateOptions{
+		SourcePath: makefile,
+		OutputPath: outputPath,
+	})
+	if err == nil {
+		t.Error("expected error when lazy.toml exists without --force")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunForceOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	makefile := filepath.Join(dir, "Makefile")
+	os.WriteFile(makefile, []byte(".PHONY: build\nbuild:\n\tgo build\n"), 0644)
+
+	outputPath := filepath.Join(dir, "lazy.toml")
+	os.WriteFile(outputPath, []byte("old content"), 0644)
+
+	err := Run(MigrateOptions{
+		SourcePath: makefile,
+		OutputPath: outputPath,
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(outputPath)
+	if strings.Contains(string(data), "old content") {
+		t.Error("file should have been overwritten")
+	}
+}
+
+func TestHasMakefile(t *testing.T) {
+	// Directory with a Makefile
+	dirWith := t.TempDir()
+	os.WriteFile(filepath.Join(dirWith, "Makefile"), []byte("all:\n\techo hi\n"), 0644)
+
+	oldDir, _ := os.Getwd()
+
+	os.Chdir(dirWith)
+	if !HasMakefile() {
+		t.Error("HasMakefile should return true when Makefile exists")
+	}
+
+	// Directory without a Makefile
+	dirWithout := t.TempDir()
+	os.Chdir(dirWithout)
+	if HasMakefile() {
+		t.Error("HasMakefile should return false when no Makefile exists")
+	}
+
+	os.Chdir(oldDir)
+}
+
+func TestEndToEndComplex(t *testing.T) {
+	makefile := `.PHONY: all build test clean lint deploy
+
+.DEFAULT_GOAL := all
+
+CC := gcc
+CFLAGS := -Wall -g
+OUTPUT_DIR := build
+export API_KEY = my-secret
+
+# Run everything
+all: build test lint
+
+# Compile the application
+build: clean
+	@mkdir -p $(OUTPUT_DIR)
+	$(CC) $(CFLAGS) -o $(OUTPUT_DIR)/app main.c
+
+# Execute test suite
+test:
+	@echo "Running tests..."
+	./run_tests.sh
+
+# Remove build artifacts
+clean:
+	rm -rf $(OUTPUT_DIR)
+
+# Check code style
+lint:
+	golangci-lint run
+
+# Deploy to production
+deploy: build test
+	scp $(OUTPUT_DIR)/app server:/opt/app
+	$(shell date +%Y) > deploy.log
+`
+	ir, err := parseMakefileContent(makefile, ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toml := ConvertToTOML(ir)
+
+	// Verify structure
+	checks := []struct {
+		desc string
+		want string
+	}{
+		{"header", "# Generated by imlazy migrate from Makefile"},
+		{"default", `default = "all"`},
+		{"cc var", `cc = "gcc"`},
+		{"cflags var", `cflags = "-Wall -g"`},
+		{"output_dir var", `output_dir = "build"`},
+		{"env section", "[env]"},
+		{"api key", `API_KEY = "my-secret"`},
+		{"build command", "[commands.build]"},
+		{"build desc", `desc = "Compile the application"`},
+		{"var refs", "{{cc}}"},
+		{"var refs cflags", "{{cflags}}"},
+		{"var refs outdir", "{{output_dir}}"},
+		{"test command", "[commands.test]"},
+		{"clean command", "[commands.clean]"},
+		{"lint command", "[commands.lint]"},
+		{"deploy command", "[commands.deploy]"},
+		{"all deps", `dep = ["build", "test", "lint"]`},
+		{"build dep clean", `dep = ["clean"]`},
+		{"deploy deps", `dep = ["build", "test"]`},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(toml, c.want) {
+			t.Errorf("%s: expected %q in output:\n%s", c.desc, c.want, toml)
+		}
+	}
+}

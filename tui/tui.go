@@ -1,3 +1,4 @@
+// Package tui provides an interactive terminal command picker using bubbletea.
 package tui
 
 import (
@@ -10,7 +11,12 @@ import (
 	"github.com/javanhut/imlazy/parser"
 )
 
-// Styles
+const (
+	maxVisible       = 10
+	nameColumnWidth  = 20
+	runPreviewMaxLen = 60
+)
+
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -37,9 +43,8 @@ type model struct {
 	filtered    []parser.CommandInfo
 	cursor      int
 	textInput   textinput.Model
-	selected    string
-	quitting    bool
-	windowWidth int
+	selected string
+	quitting bool
 }
 
 // initialModel creates the initial model state
@@ -98,8 +103,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-	case tea.WindowSizeMsg:
-		m.windowWidth = msg.Width
 	}
 
 	// Handle text input
@@ -188,7 +191,6 @@ func (m model) View() string {
 	}
 
 	// Command list
-	maxVisible := 10
 	start := 0
 	if m.cursor >= maxVisible {
 		start = m.cursor - maxVisible + 1
@@ -206,7 +208,7 @@ func (m model) View() string {
 		}
 
 		// Command name and description
-		line := fmt.Sprintf("%s%-20s", cursor, cmd.Name)
+		line := fmt.Sprintf("%s%-*s", cursor, nameColumnWidth, cmd.Name)
 		if cmd.Description != "" {
 			line += fmt.Sprintf(" %s", dimStyle.Render(cmd.Description))
 		}
@@ -222,8 +224,8 @@ func (m model) View() string {
 			b.WriteString("\n")
 			b.WriteString(dimStyle.Render("Run: "))
 			runPreview := strings.Join(selected.Run, " && ")
-			if len(runPreview) > 60 {
-				runPreview = runPreview[:57] + "..."
+			if len(runPreview) > runPreviewMaxLen {
+				runPreview = runPreview[:runPreviewMaxLen-3] + "..."
 			}
 			b.WriteString(previewStyle.Render(runPreview))
 			b.WriteString("\n")

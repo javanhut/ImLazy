@@ -1,3 +1,4 @@
+// Package completion generates shell completion scripts for bash, zsh, and fish.
 package completion
 
 import (
