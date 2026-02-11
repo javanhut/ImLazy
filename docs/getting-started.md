@@ -28,7 +28,9 @@ Navigate to your project and run:
 imlazy init
 ```
 
-This creates a `lazy.toml` file. Open it. It has comments. Read them or don't, I'm not your mother.
+This creates a `lazy.toml` file. If a Makefile exists in the directory, it auto-converts it instead of generating a blank template. Open it. It has comments. Read them or don't, I'm not your mother.
+
+Already have a Makefile and want more control? Use `imlazy migrate` directly (see [Commands](commands.md#makefile-migration)).
 
 ## Your First Command
 

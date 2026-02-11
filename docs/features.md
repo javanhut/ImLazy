@@ -356,3 +356,27 @@ Catches:
 - Duplicate aliases
 
 Run this in CI if you're paranoid.
+
+## Makefile Migration
+
+Already have a Makefile? Convert it:
+
+```bash
+imlazy migrate
+```
+
+Auto-discovers `Makefile`, `makefile`, or `GNUmakefile` in the current directory and generates a `lazy.toml`.
+
+Preview first:
+
+```bash
+imlazy migrate --dry-run
+```
+
+Variables, targets, prerequisites, and comments all get mapped to their TOML equivalents. Things that can't translate cleanly (conditionals, shell functions, `include` directives) are flagged as warnings in the output.
+
+### Auto-Migration on Init
+
+If you run `imlazy init` in a directory that has a Makefile, it automatically migrates instead of creating the default template. No extra steps needed.
+
+See [Commands](commands.md#makefile-migration) for all the migrate flags.

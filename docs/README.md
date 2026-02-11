@@ -19,6 +19,8 @@ ImLazy lets you write them down once in a `lazy.toml` file and run them with `im
 
 That's it. That's the tool.
 
+Already have a Makefile? Run `imlazy migrate` and it'll convert it to `lazy.toml` for you.
+
 ## Quick Example
 
 ```toml
