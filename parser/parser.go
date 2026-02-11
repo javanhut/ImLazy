@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/javanhut/imlazy/migrate"
 	"github.com/javanhut/imlazy/output"
 )
 
@@ -374,6 +375,14 @@ func (c *Config) InitialCommand() {
 
 	if _, err := os.Stat(tomlData); err != nil {
 		if os.IsNotExist(err) {
+			if migrate.HasMakefile() {
+				if err := migrate.Run(migrate.MigrateOptions{}); err != nil {
+					output.PrintError("Migration failed: %v", err)
+					output.PrintInfo("Creating default lazy.toml instead...")
+				} else {
+					return
+				}
+			}
 			initialContent := `# ImLazy configuration file
 
 [settings]

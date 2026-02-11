@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/javanhut/imlazy/completion"
+	"github.com/javanhut/imlazy/migrate"
 	"github.com/javanhut/imlazy/output"
 	"github.com/javanhut/imlazy/parser"
 	"github.com/javanhut/imlazy/tui"
@@ -103,6 +104,26 @@ func main() {
 	if len(remainingArgs) > 0 && remainingArgs[0] == "init" {
 		cfg := parser.Config{}
 		cfg.InitialCommand()
+		return
+	}
+
+	// Handle migrate command (doesn't need config)
+	if len(remainingArgs) > 0 && remainingArgs[0] == "migrate" {
+		mopts := migrate.ParseArgs(remainingArgs[1:])
+		// Inherit global flags
+		if opts.DryRun {
+			mopts.DryRun = true
+		}
+		if opts.Force {
+			mopts.Force = true
+		}
+		if opts.Verbose {
+			mopts.Verbose = true
+		}
+		if err := migrate.Run(mopts); err != nil {
+			output.PrintError("Error: %v", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -396,6 +417,7 @@ func printBasicHelp() {
 	fmt.Println("  list [namespace]   List commands (optionally by namespace)")
 	fmt.Println("  watch <cmd>        Watch files and re-run command on changes")
 	fmt.Println("  completion <shell> Generate shell completion (bash, zsh, fish)")
+	fmt.Println("  migrate            Convert Makefile to lazy.toml")
 	fmt.Println("  last, again, -     Replay last command from history")
 	fmt.Println()
 	fmt.Println("No lazy.toml found. Run 'imlazy init' to create one.")
@@ -438,6 +460,7 @@ func printHelp(info *parser.Config) {
 		{"list [ns]", "List commands (optionally by namespace)"},
 		{"watch <cmd>", "Watch files and re-run command on changes"},
 		{"completion", "Generate shell completion (bash, zsh, fish)"},
+		{"migrate", "Convert Makefile to lazy.toml"},
 		{"last, again", "Replay last command from history"},
 	}
 
