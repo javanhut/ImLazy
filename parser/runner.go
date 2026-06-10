@@ -19,6 +19,11 @@ import (
 // Runner executes commands from a loaded Config.
 type Runner struct {
 	Config *Config
+
+	// Process tracking for watch --restart mode.
+	procMu      sync.Mutex
+	currentProc *os.Process
+	killed      bool
 }
 
 // NewRunner creates a Runner bound to the given Config.
@@ -87,6 +92,9 @@ func (r *Runner) runCommandWithVisited(name string, visiting map[string]bool, op
 
 	extraVars := map[string]string{
 		"args": strings.Join(opts.Args, " "),
+	}
+	for k, v := range opts.NamedArgs {
+		extraVars[k] = v
 	}
 
 	cleanup, err := r.changeWorkingDir(cmd, extraVars, opts)
@@ -354,6 +362,7 @@ func (r *Runner) executeWithRetry(cmd Command, extraVars map[string]string, opts
 func (r *Runner) executeCommands(runCommands []string, extraVars map[string]string, timeout time.Duration, opts RunOptions) error {
 	for _, command := range runCommands {
 		interpolatedCmd := r.Config.interpolateVariables(command, extraVars)
+		interpolatedCmd = r.resolvePlaceholders(interpolatedCmd, extraVars, opts)
 
 		if len(opts.Args) > 0 && !strings.Contains(command, "{{args}}") {
 			interpolatedCmd = interpolatedCmd + " " + strings.Join(opts.Args, " ")
@@ -370,7 +379,7 @@ func (r *Runner) executeCommands(runCommands []string, extraVars map[string]stri
 			output.PrintCommand("$ %s", interpolatedCmd)
 		}
 
-		if err := r.runWithTimeout(interpolatedCmd, timeout); err != nil {
+		if err := r.runWithTimeout(interpolatedCmd, timeout, opts); err != nil {
 			return err
 		}
 	}
@@ -389,9 +398,9 @@ func buildCommand(ctx context.Context, cmdStr string) *exec.Cmd {
 	}
 }
 
-// runWithTimeout executes a single command string with optional timeout and
-// signal handling.
-func (r *Runner) runWithTimeout(interpolatedCmd string, timeout time.Duration) error {
+// runWithTimeout executes a single command string with optional timeout,
+// signal handling, output prefixing, and restart-mode process tracking.
+func (r *Runner) runWithTimeout(interpolatedCmd string, timeout time.Duration, opts RunOptions) error {
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -399,64 +408,143 @@ func (r *Runner) runWithTimeout(interpolatedCmd string, timeout time.Duration) e
 	} else {
 		ctx, cancel = context.WithCancel(context.Background())
 	}
+	defer cancel()
 
 	cmdline := buildCommand(ctx, interpolatedCmd)
-	cmdline.Stdout = os.Stdout
-	cmdline.Stderr = os.Stderr
-	cmdline.Stdin = os.Stdin
+	if opts.OutputPrefix != "" {
+		// Multiplexed parallel output: prefix lines, detach stdin.
+		stdout := output.NewPrefixWriter(os.Stdout, opts.OutputPrefix, opts.PrefixColor)
+		stderr := output.NewPrefixWriter(os.Stderr, opts.OutputPrefix, opts.PrefixColor)
+		cmdline.Stdout = stdout
+		cmdline.Stderr = stderr
+		defer stdout.Flush()
+		defer stderr.Flush()
+	} else {
+		cmdline.Stdout = os.Stdout
+		cmdline.Stderr = os.Stderr
+		cmdline.Stdin = os.Stdin
+	}
 
-	if timeout > 0 {
+	if timeout > 0 || opts.Service {
 		cmdline.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigChan)
+
+		if err := cmdline.Start(); err != nil {
+			return fmt.Errorf("command failed to start: '%s'\n%w", interpolatedCmd, err)
+		}
+		r.setCurrentProcess(cmdline.Process)
+		defer r.clearCurrentProcess()
 
 		errChan := make(chan error, 1)
 		go func() {
-			errChan <- cmdline.Run()
+			errChan <- cmdline.Wait()
 		}()
 
 		select {
 		case err := <-errChan:
-			signal.Stop(sigChan)
-			cancel()
 			if err != nil {
+				if r.consumeKilled() {
+					// Killed deliberately by watch --restart; not a failure.
+					return nil
+				}
 				return fmt.Errorf("command failed: '%s'\n%w", interpolatedCmd, err)
 			}
 		case <-ctx.Done():
 			if cmdline.Process != nil {
 				syscall.Kill(-cmdline.Process.Pid, syscall.SIGKILL)
 			}
-			signal.Stop(sigChan)
-			cancel()
+			<-errChan
 			return fmt.Errorf("command timed out after %v: '%s'", timeout, interpolatedCmd)
 		case sig := <-sigChan:
 			if cmdline.Process != nil {
 				syscall.Kill(-cmdline.Process.Pid, syscall.SIGTERM)
 			}
-			signal.Stop(sigChan)
 			<-errChan
-			cancel()
 			return fmt.Errorf("command interrupted by %v: '%s'", sig, interpolatedCmd)
 		}
 	} else {
-		err := cmdline.Run()
-		cancel()
-		if err != nil {
+		if err := cmdline.Run(); err != nil {
 			return fmt.Errorf("command failed: '%s'\n%w", interpolatedCmd, err)
 		}
 	}
 	return nil
 }
 
-// runDepsParallel runs dependencies in parallel.
+// setCurrentProcess records the running process for Terminate/Kill.
+func (r *Runner) setCurrentProcess(p *os.Process) {
+	r.procMu.Lock()
+	defer r.procMu.Unlock()
+	r.currentProc = p
+	r.killed = false
+}
+
+func (r *Runner) clearCurrentProcess() {
+	r.procMu.Lock()
+	defer r.procMu.Unlock()
+	r.currentProc = nil
+}
+
+// consumeKilled reports whether the current process was deliberately killed
+// (watch --restart) and resets the flag.
+func (r *Runner) consumeKilled() bool {
+	r.procMu.Lock()
+	defer r.procMu.Unlock()
+	k := r.killed
+	r.killed = false
+	return k
+}
+
+// Terminate sends SIGTERM to the running command's process group. Used by
+// watch mode with restart=true. Returns false if nothing is running.
+func (r *Runner) Terminate() bool {
+	r.procMu.Lock()
+	defer r.procMu.Unlock()
+	if r.currentProc == nil {
+		return false
+	}
+	r.killed = true
+	syscall.Kill(-r.currentProc.Pid, syscall.SIGTERM)
+	return true
+}
+
+// Kill force-kills the running command's process group.
+func (r *Runner) Kill() {
+	r.procMu.Lock()
+	defer r.procMu.Unlock()
+	if r.currentProc != nil {
+		r.killed = true
+		syscall.Kill(-r.currentProc.Pid, syscall.SIGKILL)
+	}
+}
+
+// padToWidth left-justifies names to a common width for aligned prefixes.
+func padToWidth(name string, width int) string {
+	return fmt.Sprintf("%-*s", width, name)
+}
+
+// maxNameLen returns the length of the longest name in the list.
+func maxNameLen(names []string) int {
+	max := 0
+	for _, n := range names {
+		if len(n) > max {
+			max = len(n)
+		}
+	}
+	return max
+}
+
+// runDepsParallel runs dependencies in parallel with prefixed output.
 func (r *Runner) runDepsParallel(deps []string, visiting map[string]bool, opts RunOptions) error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(deps))
+	width := maxNameLen(deps)
 
-	for _, dep := range deps {
+	for i, dep := range deps {
 		wg.Add(1)
-		go func(depName string) {
+		go func(depName string, idx int) {
 			defer wg.Done()
 
 			visitingCopy := make(map[string]bool)
@@ -471,10 +559,12 @@ func (r *Runner) runDepsParallel(deps []string, visiting map[string]bool, opts R
 			depOpts := opts
 			depOpts.Args = nil
 			depOpts.IsDependency = true
+			depOpts.OutputPrefix = padToWidth(depName, width)
+			depOpts.PrefixColor = idx
 			if err := r.runCommandWithVisited(depName, visitingCopy, depOpts); err != nil {
 				errChan <- fmt.Errorf("dependency '%s' failed: %w", depName, err)
 			}
-		}(dep)
+		}(dep, i)
 	}
 
 	wg.Wait()
@@ -487,19 +577,23 @@ func (r *Runner) runDepsParallel(deps []string, visiting map[string]bool, opts R
 	return nil
 }
 
-// runCommandsParallel runs commands in parallel.
+// runCommandsParallel runs commands in parallel with prefixed output.
 func (r *Runner) runCommandsParallel(commands []string, opts RunOptions) error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(commands))
+	width := maxNameLen(commands)
 
-	for _, cmd := range commands {
+	for i, cmd := range commands {
 		wg.Add(1)
-		go func(cmdName string) {
+		go func(cmdName string, idx int) {
 			defer wg.Done()
-			if err := r.RunCommandWithOptions(cmdName, opts); err != nil {
+			cmdOpts := opts
+			cmdOpts.OutputPrefix = padToWidth(cmdName, width)
+			cmdOpts.PrefixColor = idx
+			if err := r.RunCommandWithOptions(cmdName, cmdOpts); err != nil {
 				errChan <- fmt.Errorf("command '%s' failed: %w", cmdName, err)
 			}
-		}(cmd)
+		}(cmd, i)
 	}
 
 	wg.Wait()

@@ -5,7 +5,7 @@ All the ways to invoke this thing.
 ## Basic Usage
 
 ```bash
-imlazy [flags] [command...] [-- args...]
+imlazy [flags] [command...] [key=value...] [-- args...]
 ```
 
 ## Flags
@@ -13,14 +13,16 @@ imlazy [flags] [command...] [-- args...]
 | Flag | Short | What it does |
 |------|-------|-------------|
 | `--dry-run` | `-n` | Show what would run without running it |
-| `--verbose` | `-V` | More output, including timing |
+| `--verbose` | `-v` | More output, including timing |
 | `--quiet` | `-q` | Less output, errors only |
 | `--force` | `-f` | Ignore `if_changed`, run anyway |
 | `--watch` | `-w` | Watch files and re-run on changes |
 | `--parallel` | `-p` | Run multiple commands in parallel |
 | `--interactive` | `-i` | Open the fuzzy picker |
-| `--version` | `-v` | Show version |
+| `--version` | `-V` | Show version |
 | `--help` | `-h` | Show help |
+
+Unknown flags are an error (so a typo'd flag can't silently run as a command).
 
 ## Built-in Commands
 
@@ -29,14 +31,56 @@ These work without a `lazy.toml`:
 | Command | What it does |
 |---------|-------------|
 | `init` | Create a `lazy.toml` in the current directory |
+| `add <name> -- <cmd>` | Append a command to `lazy.toml` (creates one if needed) |
+| `edit` | Open `lazy.toml` in `$EDITOR` |
 | `help` | Show help (alias: `how`) |
 | `version` | Show version info |
 | `validate` | Check your `lazy.toml` for errors |
 | `list [namespace]` | List available commands |
 | `watch <cmd>` | Watch mode for a command |
 | `completion <shell>` | Generate shell completions |
-| `migrate` | Convert a Makefile to `lazy.toml` |
+| `completion install` | Install completions for your current shell |
+| `migrate` | Convert a Makefile/justfile/Taskfile/package.json to `lazy.toml` |
+| `history [n]` | Show recent command history |
 | `last` / `again` / `-` | Replay last command from history |
+
+## Zero-Config Mode
+
+No `lazy.toml`? No problem. In a directory with `go.mod`, `package.json`,
+`Cargo.toml`, or `pyproject.toml`, ImLazy auto-detects common commands
+(`build`, `test`, npm scripts, etc.) so `imlazy test` works with zero setup.
+Run `imlazy init` or `imlazy migrate` when you want a real config.
+
+## Adding Commands From the CLI
+
+Too lazy to open an editor:
+
+```bash
+imlazy add greet --desc="Say hi" --alias=g -- echo hello world
+```
+
+Appends to the nearest `lazy.toml` (creating one if there isn't any), preserving
+existing comments and formatting. Or just open the config:
+
+```bash
+imlazy edit     # opens lazy.toml in $EDITOR
+```
+
+## Runtime Placeholders
+
+`key=value` arguments fill `{{key}}` placeholders at run time:
+
+```toml
+[commands.deploy]
+run = ["./deploy.sh --env {{env}}"]
+```
+
+```bash
+imlazy deploy env=prod
+```
+
+Defaults come from `[variables]`. If a placeholder is still unresolved and
+you're on an interactive terminal, ImLazy prompts you for it.
 
 ## Running Commands
 
@@ -139,6 +183,25 @@ run = ["go test ./..."]
 
 If no patterns are defined, defaults to `**/*.go` because this is probably a Go project.
 
+### Restart Mode (dev servers)
+
+For long-running commands, set `restart = true` and watch mode kills the
+process (and its children) on every change, then relaunches it — like
+`nodemon`/`air`:
+
+```toml
+[commands.dev]
+run = ["go run ."]
+watch = ["**/*.go"]
+restart = true
+```
+
+```bash
+imlazy -w dev
+```
+
+SIGTERM first; SIGKILL if it ignores you for 5 seconds.
+
 ## Interactive Mode
 
 Can't remember your command names? Same.
@@ -149,6 +212,9 @@ imlazy -i
 
 Opens a fuzzy picker. Type to filter. Enter to select. Esc to give up.
 
+Commands are sorted by frecency (frequency + recency), so the thing you
+actually run all the time is at the top.
+
 Also opens automatically if you run `imlazy` with no arguments and no default command is set.
 
 ## Command History
@@ -156,9 +222,11 @@ Also opens automatically if you run `imlazy` with no arguments and no default co
 ImLazy remembers what you ran.
 
 ```bash
-imlazy last      # Run the last command again
-imlazy again     # Same thing
-imlazy -         # Same thing but edgier
+imlazy last        # Run the last command again
+imlazy again       # Same thing
+imlazy -           # Same thing but edgier
+imlazy history     # List the last 20 runs
+imlazy history 50  # List more
 ```
 
 History is stored in `.lazy/history.json`. Don't commit it. It's in `.gitignore` if you ran `imlazy init`.
@@ -180,7 +248,14 @@ Catches:
 
 ## Shell Completion
 
-Generate completion scripts:
+The lazy way — detects your shell from `$SHELL` and writes the script to the
+right place:
+
+```bash
+imlazy completion install
+```
+
+Or generate the scripts yourself:
 
 ```bash
 # Bash
@@ -219,7 +294,10 @@ imlazy build
 imlazy -n deploy
 
 # Verbose with timing
-imlazy -V build
+imlazy -v build
+
+# Fill a {{env}} placeholder at runtime
+imlazy deploy env=prod
 
 # Watch mode
 imlazy -w test
@@ -243,21 +321,26 @@ imlazy last
 imlazy test:*
 ```
 
-## Makefile Migration
+## Migration
 
-Convert a Makefile to `lazy.toml`:
+Convert your existing task runner config to `lazy.toml`:
 
 ```bash
 imlazy migrate
 ```
 
-Auto-discovers `Makefile`, `makefile`, or `GNUmakefile` in the current directory.
+Auto-discovers, in priority order:
+
+1. `Makefile` / `makefile` / `GNUmakefile`
+2. `justfile` / `Justfile` / `.justfile`
+3. `Taskfile.yml` / `Taskfile.yaml`
+4. `package.json` (npm scripts)
 
 ### Migrate Flags
 
 | Flag | What it does |
 |------|-------------|
-| `--source=<path>` | Use a specific Makefile instead of auto-discovering |
+| `--source=<path>` | Use a specific file instead of auto-discovering |
 | `--output=<path>` | Write to a custom path (default: `lazy.toml`) |
 | `--force` | Overwrite an existing `lazy.toml` |
 | `--dry-run` / `-n` | Print the generated TOML to stdout without writing |
@@ -265,12 +348,25 @@ Auto-discovers `Makefile`, `makefile`, or `GNUmakefile` in the current directory
 
 ### What Gets Converted
 
+From a **Makefile**:
+
 - **Variables** become `[variables]` (lowercase) or `[env]` (exported)
 - **Targets** become `[commands.<name>]` with recipe lines as the `run` array
 - **Prerequisites** that are also targets become `dep` entries
 - **Comments** above targets become `desc` fields
 - **`.DEFAULT_GOAL`** becomes `settings.default`
 - **`.PHONY`** and other special targets are skipped
+
+From a **justfile**: recipes, dependencies, comments-as-descriptions, and
+variables (`{{var}}` syntax passes through unchanged — it's the same syntax).
+Recipe parameters aren't converted (use runtime placeholders instead).
+
+From a **Taskfile**: tasks, `deps`, `desc`, and static `vars`/`env` —
+`{{.VAR}}` template refs become `{{var}}` placeholders.
+
+From **package.json**: each script becomes a command proxied through your
+package manager (detected from the lockfile: npm, yarn, pnpm, or bun), so
+`node_modules/.bin` keeps working.
 
 ### Examples
 

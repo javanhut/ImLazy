@@ -9,10 +9,12 @@ import (
 
 // Settings holds global configuration options that apply to all commands.
 type Settings struct {
-	Default  string   `toml:"default"`
-	Parallel bool     `toml:"parallel"`
-	Include  []string `toml:"include"`
-	EnvFile  []string `toml:"env_file"`
+	Default     string   `toml:"default"`
+	Parallel    bool     `toml:"parallel"`
+	Include     []string `toml:"include"`
+	EnvFile     []string `toml:"env_file"`
+	Notify      *bool    `toml:"notify"`
+	NotifyAfter string   `toml:"notify_after"`
 }
 
 // Config represents the full lazy.toml configuration.
@@ -25,6 +27,7 @@ type Config struct {
 	configPath string
 	configDir  string
 	aliasMap   map[string]string
+	detectedAs string
 }
 
 // Command represents a single command definition in the configuration.
@@ -44,6 +47,7 @@ type Command struct {
 	Retry      int               `toml:"retry"`
 	RetryDelay string            `toml:"retry_delay"`
 	EnvFile    []string          `toml:"env_file"`
+	Restart    bool              `toml:"restart"`
 }
 
 // PlatformRun handles both simple run arrays and platform-specific runs.
@@ -94,7 +98,16 @@ type RunOptions struct {
 	Quiet        bool
 	Force        bool
 	Args         []string
+	NamedArgs    map[string]string
 	IsDependency bool
+	// OutputPrefix, when non-empty, prefixes every output line with a
+	// colored label (used for multiplexed parallel output).
+	OutputPrefix string
+	// PrefixColor selects the color used for OutputPrefix.
+	PrefixColor int
+	// Service marks a long-running command managed by watch --restart;
+	// it runs in its own process group so it can be killed and restarted.
+	Service bool
 }
 
 // HistoryEntry represents a command execution in history.

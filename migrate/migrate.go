@@ -19,8 +19,13 @@ type MigrateOptions struct {
 	Verbose    bool   // show conversion details
 }
 
-// makefileNames lists Makefile names to search for, in priority order.
-var makefileNames = []string{"Makefile", "makefile", "GNUmakefile"}
+// sourceNames lists migration source files to search for, in priority order.
+var sourceNames = []string{
+	"Makefile", "makefile", "GNUmakefile",
+	"justfile", "Justfile", ".justfile",
+	"Taskfile.yml", "Taskfile.yaml", "taskfile.yml", "taskfile.yaml",
+	"package.json",
+}
 
 // Run executes the migrate command.
 func Run(opts MigrateOptions) error {
@@ -39,8 +44,8 @@ func Run(opts MigrateOptions) error {
 		output.PrintInfo("Parsing %s...", sourcePath)
 	}
 
-	// Parse the Makefile
-	ir, err := ParseMakefile(sourcePath)
+	// Parse the source file based on its type
+	ir, err := parseSource(sourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to parse %s: %w", sourcePath, err)
 	}
@@ -114,13 +119,28 @@ func ParseArgs(args []string) MigrateOptions {
 	return opts
 }
 
-// HasMakefile returns true if a Makefile exists in the current directory.
+// HasMakefile returns true if a migration source exists in the current directory.
 func HasMakefile() bool {
 	_, err := discoverSource("")
 	return err == nil
 }
 
-// discoverSource finds the Makefile to parse.
+// parseSource dispatches to the right parser based on the source filename.
+func parseSource(path string) (*MakefileIR, error) {
+	base := strings.ToLower(filepath.Base(path))
+	switch {
+	case base == "package.json":
+		return ParsePackageJSON(path)
+	case strings.Contains(base, "justfile"):
+		return ParseJustfile(path)
+	case strings.HasPrefix(base, "taskfile") && (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")):
+		return ParseTaskfile(path)
+	default:
+		return ParseMakefile(path)
+	}
+}
+
+// discoverSource finds the migration source file to parse.
 func discoverSource(explicit string) (string, error) {
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err != nil {
@@ -134,12 +154,12 @@ func discoverSource(explicit string) (string, error) {
 		return "", fmt.Errorf("cannot get working directory: %w", err)
 	}
 
-	for _, name := range makefileNames {
+	for _, name := range sourceNames {
 		path := filepath.Join(cwd, name)
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
 	}
 
-	return "", fmt.Errorf("no Makefile found in current directory (looked for: %s)", strings.Join(makefileNames, ", "))
+	return "", fmt.Errorf("no migration source found in current directory (looked for: %s)", strings.Join(sourceNames, ", "))
 }

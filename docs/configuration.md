@@ -26,6 +26,8 @@ default = "build"              # Command to run when you just type `imlazy`
 parallel = true                # Run dependencies in parallel (living dangerously)
 include = ["ci.toml"]          # Split config across files because one file is too simple
 env_file = [".env", ".env.local"]  # Load these before running anything
+notify = true                  # Desktop notification for long runs (default on)
+notify_after = "30s"           # How long is "long"
 ```
 
 ## Variables
@@ -97,6 +99,7 @@ retry_delay = "1s"                  # Wait between retries
 watch = ["**/*.go"]                 # Patterns for watch mode
 if_changed = ["**/*.go", "go.mod"]  # Only run if these changed
 env_file = [".env.build"]           # Load these env files for this command
+restart = true                      # Watch mode: kill and relaunch on change (dev servers)
 ```
 
 ### Platform-Specific Commands

@@ -8,8 +8,9 @@ import (
 	"github.com/javanhut/imlazy/output"
 )
 
-// Init creates a new lazy.toml in the current directory. If a Makefile exists,
-// it attempts automatic migration first.
+// Init creates a new lazy.toml in the current directory. If a migration
+// source exists (Makefile, justfile, Taskfile, package.json), it attempts
+// automatic migration first.
 func Init() {
 	currDir, err := os.Getwd()
 	if err != nil {

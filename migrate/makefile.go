@@ -28,13 +28,15 @@ type MakeTarget struct {
 	IsDotTarget   bool // starts with '.'
 }
 
-// MakefileIR is the intermediate representation of a parsed Makefile.
+// MakefileIR is the intermediate representation of a parsed task-runner
+// config (Makefile, justfile, Taskfile, or package.json scripts).
 type MakefileIR struct {
 	Variables   []MakeVar
 	Targets     []MakeTarget
 	DefaultGoal string
 	Includes    []string
 	Warnings    []string
+	Source      string // e.g. "Makefile", "justfile", "Taskfile", "package.json"
 }
 
 // imlazyBuiltins are command names reserved by ImLazy.

@@ -14,7 +14,7 @@ _imlazy_completions() {
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Built-in commands
-    local builtins="help how init version"
+    local builtins="help how init add edit version validate list watch completion migrate history last again"
 
     # Get commands from lazy.toml if it exists
     local commands=""
@@ -23,7 +23,7 @@ _imlazy_completions() {
     fi
 
     # Options
-    local opts="-n --dry-run -q --quiet -V --verbose -v --version -h --help"
+    local opts="-n --dry-run -q --quiet -v --verbose -V --version -f --force -w --watch -p --parallel -i --interactive -h --help"
 
     case "${prev}" in
         imlazy)
@@ -58,23 +58,37 @@ _imlazy() {
         '--dry-run[Show commands without executing]'
         '-q[Suppress output except errors]'
         '--quiet[Suppress output except errors]'
-        '-V[Show detailed output and timing]'
+        '-v[Show detailed output and timing]'
         '--verbose[Show detailed output and timing]'
-        '-v[Show version information]'
+        '-V[Show version information]'
         '--version[Show version information]'
         '-h[Show help message]'
         '--help[Show help message]'
+        '-w[Watch files and re-run on changes]'
         '--watch[Watch files and re-run on changes]'
+        '-p[Run multiple commands in parallel]'
+        '--parallel[Run multiple commands in parallel]'
+        '-i[Open interactive command picker]'
+        '--interactive[Open interactive command picker]'
+        '-f[Force execution (ignore if_changed)]'
+        '--force[Force execution]'
     )
 
     commands=(
         'help:Show available commands'
         'how:Show available commands'
         'init:Create a new lazy.toml'
+        'add:Add a command to lazy.toml'
+        'edit:Open lazy.toml in $EDITOR'
         'version:Show version information'
         'watch:Watch files and re-run command on changes'
         'validate:Validate lazy.toml configuration'
-        'completion:Generate shell completion script'
+        'list:List commands'
+        'completion:Generate or install shell completion script'
+        'migrate:Convert Makefile/justfile/Taskfile/package.json to lazy.toml'
+        'history:Show recent command history'
+        'last:Replay last command'
+        'again:Replay last command'
     )
 
     # Get commands from lazy.toml if it exists
@@ -117,19 +131,30 @@ complete -c imlazy -f
 # Options
 complete -c imlazy -s n -l dry-run -d 'Show commands without executing'
 complete -c imlazy -s q -l quiet -d 'Suppress output except errors'
-complete -c imlazy -s V -l verbose -d 'Show detailed output and timing'
-complete -c imlazy -s v -l version -d 'Show version information'
+complete -c imlazy -s v -l verbose -d 'Show detailed output and timing'
+complete -c imlazy -s V -l version -d 'Show version information'
+complete -c imlazy -s f -l force -d 'Force execution (ignore if_changed)'
+complete -c imlazy -s w -l watch -d 'Watch files and re-run on changes'
+complete -c imlazy -s p -l parallel -d 'Run multiple commands in parallel'
+complete -c imlazy -s i -l interactive -d 'Open interactive command picker'
 complete -c imlazy -s h -l help -d 'Show help message'
-complete -c imlazy -l watch -d 'Watch files and re-run on changes'
 
 # Built-in commands
 complete -c imlazy -n '__fish_use_subcommand' -a 'help' -d 'Show available commands'
 complete -c imlazy -n '__fish_use_subcommand' -a 'how' -d 'Show available commands'
 complete -c imlazy -n '__fish_use_subcommand' -a 'init' -d 'Create a new lazy.toml'
+complete -c imlazy -n '__fish_use_subcommand' -a 'add' -d 'Add a command to lazy.toml'
+complete -c imlazy -n '__fish_use_subcommand' -a 'edit' -d 'Open lazy.toml in $EDITOR'
 complete -c imlazy -n '__fish_use_subcommand' -a 'version' -d 'Show version information'
 complete -c imlazy -n '__fish_use_subcommand' -a 'watch' -d 'Watch files and re-run command'
 complete -c imlazy -n '__fish_use_subcommand' -a 'validate' -d 'Validate lazy.toml configuration'
-complete -c imlazy -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion script'
+complete -c imlazy -n '__fish_use_subcommand' -a 'list' -d 'List commands'
+complete -c imlazy -n '__fish_use_subcommand' -a 'completion' -d 'Generate or install shell completion script'
+complete -c imlazy -n '__fish_use_subcommand' -a 'migrate' -d 'Convert Makefile/justfile/Taskfile/package.json'
+complete -c imlazy -n '__fish_use_subcommand' -a 'history' -d 'Show recent command history'
+complete -c imlazy -n '__fish_use_subcommand' -a 'last' -d 'Replay last command'
+complete -c imlazy -n '__fish_use_subcommand' -a 'again' -d 'Replay last command'
+complete -c imlazy -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish install'
 
 # Dynamic command completion from lazy.toml
 function __imlazy_commands

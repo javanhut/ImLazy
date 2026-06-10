@@ -1,0 +1,169 @@
+package parser
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func chdirTemp(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(oldWd) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestDetectConfigGo(t *testing.T) {
+	dir := chdirTemp(t)
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/x\n"), 0644)
+
+	cfg, ok := DetectConfig()
+	if !ok {
+		t.Fatal("expected Go project detection")
+	}
+	if cfg.DetectedAs() != "Go" {
+		t.Errorf("expected Go, got %q", cfg.DetectedAs())
+	}
+	cmd, ok := cfg.GetCommand("test")
+	if !ok {
+		t.Fatal("expected test command")
+	}
+	if cmd.Run.Default[0] != "go test ./..." {
+		t.Errorf("unexpected test command: %v", cmd.Run.Default)
+	}
+}
+
+func TestDetectConfigNodeScripts(t *testing.T) {
+	dir := chdirTemp(t)
+	os.WriteFile(filepath.Join(dir, "package.json"),
+		[]byte(`{"scripts": {"dev": "vite", "build": "vite build"}}`), 0644)
+	os.WriteFile(filepath.Join(dir, "yarn.lock"), []byte(""), 0644)
+
+	cfg, ok := DetectConfig()
+	if !ok {
+		t.Fatal("expected Node project detection")
+	}
+	cmd, ok := cfg.GetCommand("dev")
+	if !ok {
+		t.Fatal("expected dev command")
+	}
+	if cmd.Run.Default[0] != "yarn run dev" {
+		t.Errorf("expected yarn proxy, got %v", cmd.Run.Default)
+	}
+}
+
+func TestDetectConfigNothing(t *testing.T) {
+	chdirTemp(t)
+	if _, ok := DetectConfig(); ok {
+		t.Fatal("empty dir should not detect anything")
+	}
+}
+
+func TestFrecencySort(t *testing.T) {
+	now := time.Now()
+	history := []HistoryEntry{
+		{Command: "build", Timestamp: now.Add(-30 * 24 * time.Hour)},
+		{Command: "build", Timestamp: now.Add(-29 * 24 * time.Hour)},
+		{Command: "test", Timestamp: now.Add(-10 * time.Minute)},
+	}
+
+	infos := []CommandInfo{{Name: "aaa"}, {Name: "build"}, {Name: "test"}}
+	SortByFrecency(infos, history)
+
+	// test: one recent run (4) beats build: two ancient runs (1).
+	if infos[0].Name != "test" || infos[1].Name != "build" || infos[2].Name != "aaa" {
+		got := []string{infos[0].Name, infos[1].Name, infos[2].Name}
+		t.Errorf("unexpected order: %v", got)
+	}
+}
+
+func TestFrecencyMultiCommandEntries(t *testing.T) {
+	scores := FrecencyScores([]HistoryEntry{
+		{Command: "build test", Timestamp: time.Now()},
+	})
+	if scores["build"] != 4 || scores["test"] != 4 {
+		t.Errorf("multi-command entry should credit each command: %v", scores)
+	}
+}
+
+func TestAddToConfigCreatesAndAppends(t *testing.T) {
+	dir := chdirTemp(t)
+
+	path, err := AddToConfig("greet", []string{"echo hi"}, "Say hi", []string{"g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir, _ := filepath.EvalSymlinks(dir)
+	gotDir, _ := filepath.EvalSymlinks(filepath.Dir(path))
+	if gotDir != wantDir {
+		t.Errorf("expected config in %s, got %s", wantDir, gotDir)
+	}
+
+	cfg, err := loadConfigFromPath(path, map[string]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok := cfg.GetCommand("greet")
+	if !ok {
+		t.Fatal("expected greet command")
+	}
+	if cmd.Desc != "Say hi" || cmd.Run.Default[0] != "echo hi" || cmd.Alias[0] != "g" {
+		t.Errorf("unexpected command: %+v", cmd)
+	}
+
+	// Duplicate should fail
+	if _, err := AddToConfig("greet", []string{"echo again"}, "", nil); err == nil {
+		t.Fatal("expected duplicate error")
+	}
+
+	// Namespaced names get quoted keys
+	if _, err := AddToConfig("test:unit", []string{"go test -short ./..."}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `[commands."test:unit"]`) {
+		t.Errorf("expected quoted key, got:\n%s", data)
+	}
+	cfg, err = loadConfigFromPath(path, map[string]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.GetCommand("test:unit"); !ok {
+		t.Fatal("expected test:unit command to parse")
+	}
+}
+
+func TestAddToConfigRejectsBadNames(t *testing.T) {
+	chdirTemp(t)
+	if _, err := AddToConfig("bad name", []string{"echo"}, "", nil); err == nil {
+		t.Fatal("expected invalid name error")
+	}
+	if _, err := AddToConfig("ok", nil, "", nil); err == nil {
+		t.Fatal("expected missing run command error")
+	}
+}
+
+func TestNamedArgsInterpolation(t *testing.T) {
+	cfg := &Config{
+		Variables: map[string]string{"env": "dev"},
+		Commands:  map[string]Command{},
+	}
+
+	// extraVars (named args) take priority over [variables]
+	got := cfg.interpolateVariables("deploy --env {{env}}", map[string]string{"env": "prod"})
+	if got != "deploy --env prod" {
+		t.Errorf("named arg should win: %q", got)
+	}
+
+	// falls back to [variables]
+	got = cfg.interpolateVariables("deploy --env {{env}}", nil)
+	if got != "deploy --env dev" {
+		t.Errorf("variable fallback failed: %q", got)
+	}
+}

@@ -145,6 +145,76 @@ imlazy -p build test lint
 
 Runs all three at once. First failure stops everything.
 
+### Multiplexed Output
+
+Parallel output is prefixed foreman-style so you can tell who said what:
+
+```
+build | compiling...
+test  | ok  github.com/you/app  0.42s
+lint  | clean
+```
+
+Each command gets its own color. Lines never interleave mid-line.
+
+## Zero-Config Auto-Detection
+
+No `lazy.toml`? ImLazy looks at what's in the directory:
+
+- `go.mod` → `build`, `test`, `fmt`, `vet`, `run`
+- `package.json` → every npm script (proxied through npm/yarn/pnpm/bun based on your lockfile)
+- `Cargo.toml` → `build`, `test`, `run`, `fmt`, `check`
+- `pyproject.toml` → `test`, `install` (uv- and poetry-aware)
+
+So `imlazy test` works in basically any repo with zero setup. When you want a
+real config, `imlazy init` or `imlazy migrate`.
+
+## Runtime Placeholders
+
+Pass `key=value` after the command name to fill `{{key}}` placeholders:
+
+```toml
+[commands.deploy]
+run = ["./deploy.sh --env {{env}} --tag {{tag}}"]
+```
+
+```bash
+imlazy deploy env=prod tag=v1.2
+```
+
+Defaults come from `[variables]`. Anything still unresolved gets prompted for
+interactively (TTY only). One `deploy` command instead of `deploy:dev`,
+`deploy:staging`, `deploy:prod`.
+
+## Desktop Notifications
+
+Commands that run longer than 30 seconds send a desktop notification when they
+finish (or fail), because you've obviously alt-tabbed away by then. Uses
+`osascript` on macOS and `notify-send` on Linux.
+
+```toml
+[settings]
+notify = false        # turn it off
+notify_after = "2m"   # or change the threshold
+```
+
+## Restart Watch Mode
+
+Watch mode normally re-runs a command after it finishes. For dev servers, set
+`restart = true` and ImLazy kills the whole process group on each change and
+relaunches:
+
+```toml
+[commands.dev]
+run = ["go run ."]
+watch = ["**/*.go"]
+restart = true
+```
+
+```bash
+imlazy -w dev    # nodemon, minus the node
+```
+
 ## Working Directories
 
 Run from somewhere else:
@@ -281,7 +351,9 @@ imlazy -i
 - Enter to run
 - Esc to cancel
 
-Shows command descriptions and a preview of what will run.
+Shows command descriptions and a preview of what will run. Commands are
+sorted by frecency — the ones you run most (and most recently) float to the
+top, so the right answer is usually just "Enter".
 
 Also activates automatically if:
 - You run `imlazy` with no arguments
@@ -295,6 +367,7 @@ Remembers what you ran:
 imlazy last           # Re-run last command
 imlazy again          # Same thing
 imlazy -              # Same thing
+imlazy history        # List recent runs with status
 ```
 
 Stores the last 100 commands in `.lazy/history.json`.
@@ -311,7 +384,7 @@ imlazy last           # Runs both again
 See what's happening:
 
 ```bash
-imlazy -V build
+imlazy -v build
 ```
 
 Shows:
@@ -357,15 +430,16 @@ Catches:
 
 Run this in CI if you're paranoid.
 
-## Makefile Migration
+## Migration
 
-Already have a Makefile? Convert it:
+Already have a Makefile, justfile, Taskfile, or npm scripts? Convert them:
 
 ```bash
 imlazy migrate
 ```
 
-Auto-discovers `Makefile`, `makefile`, or `GNUmakefile` in the current directory and generates a `lazy.toml`.
+Auto-discovers (in priority order): `Makefile`/`makefile`/`GNUmakefile`,
+`justfile`, `Taskfile.yml`, `package.json` — and generates a `lazy.toml`.
 
 Preview first:
 
@@ -373,10 +447,13 @@ Preview first:
 imlazy migrate --dry-run
 ```
 
-Variables, targets, prerequisites, and comments all get mapped to their TOML equivalents. Things that can't translate cleanly (conditionals, shell functions, `include` directives) are flagged as warnings in the output.
+Variables, targets/recipes/tasks/scripts, dependencies, and comments all get
+mapped to their TOML equivalents. Things that can't translate cleanly
+(conditionals, shell functions, `include` directives, just recipe parameters)
+are flagged as warnings in the output.
 
 ### Auto-Migration on Init
 
-If you run `imlazy init` in a directory that has a Makefile, it automatically migrates instead of creating the default template. No extra steps needed.
+If you run `imlazy init` in a directory that has a migration source, it automatically migrates instead of creating the default template. No extra steps needed.
 
-See [Commands](commands.md#makefile-migration) for all the migrate flags.
+See [Commands](commands.md#migration) for all the migrate flags.

@@ -39,12 +39,12 @@ var (
 
 // model represents the TUI state
 type model struct {
-	commands    []parser.CommandInfo
-	filtered    []parser.CommandInfo
-	cursor      int
-	textInput   textinput.Model
-	selected string
-	quitting bool
+	commands  []parser.CommandInfo
+	filtered  []parser.CommandInfo
+	cursor    int
+	textInput textinput.Model
+	selected  string
+	quitting  bool
 }
 
 // initialModel creates the initial model state
@@ -246,11 +246,19 @@ func (m model) View() string {
 	return b.String()
 }
 
-// RunPicker opens the interactive command picker and returns the selected command
-func RunPicker(cfg *parser.Config) (string, error) {
+// RunPicker opens the interactive command picker and returns the selected
+// command. When history is provided, commands are ordered by frecency so the
+// most-used commands surface first.
+func RunPicker(cfg *parser.Config, history *parser.HistoryStore) (string, error) {
 	commands := cfg.GetCommandsInfo()
 	if len(commands) == 0 {
 		return "", fmt.Errorf("no commands defined")
+	}
+
+	if history != nil {
+		if entries, err := history.Get(100); err == nil && len(entries) > 0 {
+			parser.SortByFrecency(commands, entries)
+		}
 	}
 
 	m := initialModel(commands)
