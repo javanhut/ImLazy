@@ -19,7 +19,11 @@ ImLazy lets you write them down once in a `lazy.toml` file and run them with `im
 
 That's it. That's the tool.
 
-Already have a Makefile? Run `imlazy migrate` and it'll convert it to `lazy.toml` for you.
+Don't even want to write the file? In Go/Node/Rust/Python projects there's
+zero-config mode — `imlazy test` works with no setup at all. Peak laziness,
+achieved.
+
+Already have a Makefile, justfile, Taskfile, or npm scripts? Run `imlazy migrate` and it'll convert them to `lazy.toml` for you.
 
 ## Quick Example
 

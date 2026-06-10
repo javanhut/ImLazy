@@ -38,7 +38,7 @@ git clone https://github.com/javanhut/imlazy
 cd imlazy
 go run main.go install
 ```
-if you're too lazy to move it its in its own lazy.toml i used the lazy to control the lazy.
+Yes, imlazy installs itself using its own `lazy.toml`. I used the lazy to control the lazy. (If it complains about `/usr/local/bin`, sudo it.)
 
 ## Quick Start
 
@@ -91,9 +91,10 @@ Done.
 - **Parallel execution** - go fast, with color-prefixed output
 - **Dotenv support** - load `.env` files
 - **Timeouts & retries** - for flaky stuff
+- **Hooks & conditionals** - `pre`/`post` commands, `if_changed` to skip work that's already done
 - **Namespacing** - `test:unit`, `test:e2e`, run with `test:*`
 - **Migration** - auto-convert Makefiles, justfiles, Taskfiles, or npm scripts
-- **`imlazy add`** - add commands without opening an editor
+- **`imlazy add` / `imlazy edit`** - change the config without remembering where it is
 - **Notifications** - desktop ping when slow commands finish (you alt-tabbed, admit it)
 - **Lazy completions** - `imlazy completion install` figures out your shell
 

@@ -255,6 +255,10 @@ right place:
 imlazy completion install
 ```
 
+Bash needs the `bash-completion` package; zsh may need `~/.zsh/completions`
+added to your `fpath`. The installer tells you if so. Yes, you have to read
+the output. I know.
+
 Or generate the scripts yourself:
 
 ```bash
