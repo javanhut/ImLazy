@@ -59,73 +59,73 @@ func colorize(color, text string) string {
 }
 
 // Error formats an error message in red
-func Error(format string, args ...interface{}) string {
+func Error(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Red, msg)
 }
 
 // Success formats a success message in green
-func Success(format string, args ...interface{}) string {
+func Success(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Green, msg)
 }
 
 // Info formats an info message in cyan
-func Info(format string, args ...interface{}) string {
+func Info(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Cyan, msg)
 }
 
 // Warning formats a warning message in yellow
-func Warning(format string, args ...interface{}) string {
+func Warning(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Yellow, msg)
 }
 
 // Command formats a command name in cyan (for showing which command is running)
-func Command(format string, args ...interface{}) string {
+func Command(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Cyan, msg)
 }
 
 // Header formats header text in gray (for output section headers)
-func Header(format string, args ...interface{}) string {
+func Header(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Gray, msg)
 }
 
 // BoldText formats text in bold
-func BoldText(format string, args ...interface{}) string {
+func BoldText(format string, args ...any) string {
 	msg := fmt.Sprintf(format, args...)
 	return colorize(Bold, msg)
 }
 
 // PrintError prints an error message to stderr in red
-func PrintError(format string, args ...interface{}) {
+func PrintError(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, Error(format, args...))
 }
 
 // PrintSuccess prints a success message in green
-func PrintSuccess(format string, args ...interface{}) {
+func PrintSuccess(format string, args ...any) {
 	fmt.Println(Success(format, args...))
 }
 
 // PrintInfo prints an info message in cyan
-func PrintInfo(format string, args ...interface{}) {
+func PrintInfo(format string, args ...any) {
 	fmt.Println(Info(format, args...))
 }
 
 // PrintWarning prints a warning message in yellow
-func PrintWarning(format string, args ...interface{}) {
+func PrintWarning(format string, args ...any) {
 	fmt.Println(Warning(format, args...))
 }
 
 // PrintCommand prints the command being executed in cyan
-func PrintCommand(format string, args ...interface{}) {
+func PrintCommand(format string, args ...any) {
 	fmt.Println(Command(format, args...))
 }
 
 // PrintHeader prints a header in gray
-func PrintHeader(format string, args ...interface{}) {
+func PrintHeader(format string, args ...any) {
 	fmt.Println(Header(format, args...))
 }

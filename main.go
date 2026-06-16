@@ -465,7 +465,7 @@ func runAdd(args []string, passthrough []string) {
 		case strings.HasPrefix(arg, "--desc="):
 			desc = strings.TrimPrefix(arg, "--desc=")
 		case strings.HasPrefix(arg, "--alias="):
-			for _, a := range strings.Split(strings.TrimPrefix(arg, "--alias="), ",") {
+			for a := range strings.SplitSeq(strings.TrimPrefix(arg, "--alias="), ",") {
 				if a = strings.TrimSpace(a); a != "" {
 					aliases = append(aliases, a)
 				}

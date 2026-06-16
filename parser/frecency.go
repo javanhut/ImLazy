@@ -27,7 +27,7 @@ func FrecencyScores(history []HistoryEntry) map[string]float64 {
 		}
 
 		// Multi-command runs ("build test") credit each command.
-		for _, name := range strings.Fields(entry.Command) {
+		for name := range strings.FieldsSeq(entry.Command) {
 			scores[name] += weight
 		}
 	}

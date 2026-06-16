@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -93,9 +94,7 @@ func (r *Runner) runCommandWithVisited(name string, visiting map[string]bool, op
 	extraVars := map[string]string{
 		"args": strings.Join(opts.Args, " "),
 	}
-	for k, v := range opts.NamedArgs {
-		extraVars[k] = v
-	}
+	maps.Copy(extraVars, opts.NamedArgs)
 
 	cleanup, err := r.changeWorkingDir(cmd, extraVars, opts)
 	if err != nil {
@@ -548,9 +547,7 @@ func (r *Runner) runDepsParallel(deps []string, visiting map[string]bool, opts R
 			defer wg.Done()
 
 			visitingCopy := make(map[string]bool)
-			for k, v := range visiting {
-				visitingCopy[k] = v
-			}
+			maps.Copy(visitingCopy, visiting)
 
 			if !opts.Quiet {
 				output.PrintHeader("Running dependency (parallel): %s", depName)

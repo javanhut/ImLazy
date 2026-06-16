@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -323,13 +324,7 @@ func TestFindSimilarCommands(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) {
 			suggestions := cfg.findSimilarCommands(tt.input)
 			if tt.shouldContain != "" {
-				found := false
-				for _, s := range suggestions {
-					if s == tt.shouldContain {
-						found = true
-						break
-					}
-				}
+				found := slices.Contains(suggestions, tt.shouldContain)
 				if !found {
 					t.Errorf("findSimilarCommands(%q) = %v, should contain %q", tt.input, suggestions, tt.shouldContain)
 				}
@@ -472,7 +467,7 @@ func TestRunOptions(t *testing.T) {
 
 func TestPlatformRunUnmarshal(t *testing.T) {
 	p := &PlatformRun{}
-	err := p.UnmarshalTOML([]interface{}{"echo hello", "echo world"})
+	err := p.UnmarshalTOML([]any{"echo hello", "echo world"})
 	if err != nil {
 		t.Fatalf("UnmarshalTOML failed: %v", err)
 	}
@@ -484,10 +479,10 @@ func TestPlatformRunUnmarshal(t *testing.T) {
 	}
 
 	p2 := &PlatformRun{}
-	err = p2.UnmarshalTOML(map[string]interface{}{
-		"linux":   []interface{}{"linux-cmd"},
-		"darwin":  []interface{}{"darwin-cmd"},
-		"windows": []interface{}{"windows-cmd"},
+	err = p2.UnmarshalTOML(map[string]any{
+		"linux":   []any{"linux-cmd"},
+		"darwin":  []any{"darwin-cmd"},
+		"windows": []any{"windows-cmd"},
 	})
 	if err != nil {
 		t.Fatalf("UnmarshalTOML failed: %v", err)

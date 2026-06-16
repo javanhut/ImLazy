@@ -57,19 +57,19 @@ type PlatformRun struct {
 }
 
 // UnmarshalTOML implements custom TOML unmarshaling for PlatformRun.
-func (p *PlatformRun) UnmarshalTOML(data interface{}) error {
+func (p *PlatformRun) UnmarshalTOML(data any) error {
 	p.ByOS = make(map[string][]string)
 
 	switch v := data.(type) {
-	case []interface{}:
+	case []any:
 		for _, item := range v {
 			if s, ok := item.(string); ok {
 				p.Default = append(p.Default, s)
 			}
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		for platform, cmds := range v {
-			if arr, ok := cmds.([]interface{}); ok {
+			if arr, ok := cmds.([]any); ok {
 				var commands []string
 				for _, item := range arr {
 					if s, ok := item.(string); ok {

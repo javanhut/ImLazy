@@ -145,8 +145,8 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		}
 
 		// Comment line
-		if strings.HasPrefix(trimmed, "#") {
-			comment := strings.TrimPrefix(trimmed, "#")
+		if after, ok := strings.CutPrefix(trimmed, "#"); ok {
+			comment := after
 			comment = strings.TrimSpace(comment)
 			if commentBuf.Len() > 0 {
 				commentBuf.WriteString(" ")
@@ -205,8 +205,8 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		// include / -include
 		if strings.HasPrefix(trimmed, "include ") || strings.HasPrefix(trimmed, "-include ") {
 			incLine := trimmed
-			if strings.HasPrefix(incLine, "-") {
-				incLine = strings.TrimPrefix(incLine, "-")
+			if after, ok := strings.CutPrefix(incLine, "-"); ok {
+				incLine = after
 			}
 			incPath := strings.TrimSpace(strings.TrimPrefix(incLine, "include"))
 			ir.Includes = append(ir.Includes, incPath)
@@ -231,7 +231,7 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		// .PHONY: target1 target2
 		if strings.HasPrefix(trimmed, ".PHONY:") || strings.HasPrefix(trimmed, ".PHONY :") {
 			rest := trimmed[strings.Index(trimmed, ":")+1:]
-			for _, t := range strings.Fields(rest) {
+			for t := range strings.FieldsSeq(rest) {
 				phonies[t] = true
 			}
 			commentBuf.Reset()
@@ -240,8 +240,8 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 
 		// .DEFAULT_GOAL
 		if strings.HasPrefix(trimmed, ".DEFAULT_GOAL") {
-			if idx := strings.Index(trimmed, "="); idx >= 0 {
-				ir.DefaultGoal = strings.TrimSpace(trimmed[idx+1:])
+			if _, after, ok := strings.Cut(trimmed, "="); ok {
+				ir.DefaultGoal = strings.TrimSpace(after)
 			}
 			commentBuf.Reset()
 			continue
@@ -254,8 +254,8 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		}
 
 		// export VAR (with or without assignment)
-		if strings.HasPrefix(trimmed, "export ") {
-			rest := strings.TrimPrefix(trimmed, "export ")
+		if after, ok := strings.CutPrefix(trimmed, "export "); ok {
+			rest := after
 			if m := varAssignRe.FindStringSubmatch("export " + rest); m != nil {
 				ir.Variables = append(ir.Variables, MakeVar{
 					Name:   m[2],
@@ -384,8 +384,8 @@ func joinContinuationLines(content string) []string {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasSuffix(line, "\\") {
-			current.WriteString(strings.TrimSuffix(line, "\\"))
+		if before, ok := strings.CutSuffix(line, "\\"); ok {
+			current.WriteString(before)
 			current.WriteString(" ")
 		} else {
 			current.WriteString(line)

@@ -35,7 +35,7 @@ func ParseJustfile(path string) (*MakefileIR, error) {
 		}
 	}
 
-	for _, rawLine := range strings.Split(string(data), "\n") {
+	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		// Indented lines are recipe bodies.
 		if current != nil && len(rawLine) > 0 && (rawLine[0] == ' ' || rawLine[0] == '\t') {
 			line := stripRecipePrefix(strings.TrimSpace(rawLine))
