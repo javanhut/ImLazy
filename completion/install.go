@@ -7,13 +7,16 @@ import (
 	"strings"
 )
 
-// Install detects the user's shell from $SHELL and writes the completion
-// script to the standard per-user location. Returns a human-readable message
-// describing what was done and any follow-up needed.
-func Install() (string, error) {
-	shell := filepath.Base(os.Getenv("SHELL"))
+// Install writes the completion script to the standard per-user location for
+// the given shell. If shell is empty it is detected from $SHELL. Returns a
+// human-readable message describing what was done and any follow-up needed.
+func Install(shell string) (string, error) {
+	if shell == "" {
+		shell = filepath.Base(os.Getenv("SHELL"))
+	}
+	shell = strings.ToLower(shell)
 	if shell == "" || shell == "." {
-		return "", fmt.Errorf("cannot detect shell ($SHELL is not set); use 'imlazy completion <bash|zsh|fish>' instead")
+		return "", fmt.Errorf("cannot detect shell ($SHELL is not set); use 'imlazy completion install <bash|zsh|fish|ravenshell>' instead")
 	}
 
 	script, err := Generate(shell)

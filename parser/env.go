@@ -12,6 +12,10 @@ import (
 )
 
 // interpolateVariables replaces {{var}} patterns in a string with their values.
+// Variable values may themselves reference other variables (e.g.
+// bindir = "{{prefix}}/bin"), so it re-runs until the result stabilizes. The
+// iteration cap prevents an infinite loop on self- or cyclically-referential
+// variables, leaving any such placeholder literal rather than hanging.
 func (c *Config) interpolateVariables(input string, extraVars map[string]string) string {
 	builtins := map[string]string{
 		"os":   runtime.GOOS,
@@ -21,20 +25,29 @@ func (c *Config) interpolateVariables(input string, extraVars map[string]string)
 
 	re := regexp.MustCompile(`\{\{(\w+)\}\}`)
 
-	return re.ReplaceAllStringFunc(input, func(match string) string {
-		varName := match[2 : len(match)-2]
+	const maxPasses = 16
+	result := input
+	for range maxPasses {
+		expanded := re.ReplaceAllStringFunc(result, func(match string) string {
+			varName := match[2 : len(match)-2]
 
-		if val, ok := extraVars[varName]; ok {
-			return val
+			if val, ok := extraVars[varName]; ok {
+				return val
+			}
+			if val, ok := c.Variables[varName]; ok {
+				return val
+			}
+			if val, ok := builtins[varName]; ok {
+				return val
+			}
+			return match
+		})
+		if expanded == result {
+			break
 		}
-		if val, ok := c.Variables[varName]; ok {
-			return val
-		}
-		if val, ok := builtins[varName]; ok {
-			return val
-		}
-		return match
-	})
+		result = expanded
+	}
+	return result
 }
 
 // getCwd returns the current working directory or an empty string on error.

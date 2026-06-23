@@ -145,11 +145,15 @@ func main() {
 	// Handle completion command (doesn't need config)
 	if len(remainingArgs) > 0 && remainingArgs[0] == "completion" {
 		if len(remainingArgs) < 2 {
-			output.PrintError("Usage: imlazy completion <bash|zsh|fish|ravenshell|install>")
+			output.PrintError("Usage: imlazy completion <bash|zsh|fish|ravenshell|install [shell]>")
 			os.Exit(1)
 		}
 		if remainingArgs[1] == "install" {
-			msg, err := completion.Install()
+			var shell string
+			if len(remainingArgs) > 2 {
+				shell = remainingArgs[2]
+			}
+			msg, err := completion.Install(shell)
 			if err != nil {
 				output.PrintError("Error: %v", err)
 				os.Exit(1)
