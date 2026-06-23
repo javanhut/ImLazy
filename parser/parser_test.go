@@ -347,6 +347,15 @@ func TestMatchGlobPattern(t *testing.T) {
 		{"**/*.go", "file.txt", false},
 		{"src/**/*.ts", "src/index.ts", true},
 		{"src/**/*.ts", "lib/index.ts", false},
+		// ** with a multi-segment suffix (previously matched only the basename).
+		{"src/**/test/*.go", "src/foo/test/bar.go", true},
+		{"src/**/test/*.go", "src/foo/bar.go", false},
+		// ** matches zero intervening segments.
+		{"src/**/test/*.go", "src/test/bar.go", true},
+		// Multiple ** in one pattern.
+		{"a/**/b/**/c.txt", "a/x/b/y/z/c.txt", true},
+		{"a/**/b/**/c.txt", "a/b/c.txt", true},
+		{"a/**/b/**/c.txt", "a/x/c.txt", false},
 	}
 
 	for _, tt := range tests {
@@ -968,7 +977,7 @@ func TestResolveCommand(t *testing.T) {
 }
 
 func TestBuildCommand(t *testing.T) {
-	cmd := buildCommand(context.Background(), "echo hello")
+	cmd := buildCommand(context.Background(), "", "echo hello")
 	if cmd == nil {
 		t.Fatal("buildCommand returned nil")
 	}

@@ -512,3 +512,29 @@ func TestStripRecipePrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMultiTargetRule(t *testing.T) {
+	// A single rule naming several targets: each must keep the shared recipe,
+	// not just the last one.
+	content := "foo.o bar.o baz.o: src.c\n\tgcc -c src.c\n"
+	ir, err := parseMakefileContent(content, ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string][]string{}
+	for _, tgt := range ir.Targets {
+		got[tgt.Name] = tgt.Recipe
+	}
+
+	for _, name := range []string{"foo.o", "bar.o", "baz.o"} {
+		recipe, ok := got[name]
+		if !ok {
+			t.Errorf("target %q missing (multi-target rule dropped it)", name)
+			continue
+		}
+		if len(recipe) != 1 || recipe[0] != "gcc -c src.c" {
+			t.Errorf("target %q recipe = %v, want [\"gcc -c src.c\"]", name, recipe)
+		}
+	}
+}

@@ -41,8 +41,11 @@ func Install() (string, error) {
 	case "zsh":
 		dest = filepath.Join(home, ".zsh", "completions", "_imlazy")
 		hint = "If completions don't load, add to ~/.zshrc:\n  fpath=(~/.zsh/completions $fpath)\n  autoload -U compinit && compinit"
+	case "ravenshell":
+		dest = filepath.Join(home, ".config", "ravenshell", "completions", "imlazy.json")
+		hint = "Start a new RavenShell session to activate."
 	default:
-		return "", fmt.Errorf("unsupported shell: %s (supported: bash, zsh, fish)", shell)
+		return "", fmt.Errorf("unsupported shell: %s (supported: bash, zsh, fish, ravenshell)", shell)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

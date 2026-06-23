@@ -270,9 +270,18 @@ imlazy completion zsh > ~/.zsh/completions/_imlazy
 
 # Fish
 imlazy completion fish > ~/.config/fish/completions/imlazy.fish
+
+# RavenShell
+imlazy completion ravenshell > ~/.config/ravenshell/completions/imlazy.json
 ```
 
 Then restart your shell or source the file.
+
+RavenShell uses a JSON completion spec rather than a script; `imlazy
+completion install` writes it to `~/.config/ravenshell/completions/imlazy.json`
+when `$SHELL` is RavenShell. Your `lazy.toml` commands are completed live (the
+spec runs `imlazy completion candidates` on Tab), so new commands show up
+without regenerating anything.
 
 ## Listing Commands
 

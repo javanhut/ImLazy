@@ -77,10 +77,6 @@ func (r *Runner) runCommandWithVisited(name string, visiting map[string]bool, op
 		return nil
 	}
 
-	if err := r.prepareEnvironment(cmd, opts); err != nil {
-		return err
-	}
-
 	if err := r.runHooks(cmd.Pre, "pre", resolvedName, visiting, opts); err != nil {
 		return err
 	}
@@ -89,22 +85,28 @@ func (r *Runner) runCommandWithVisited(name string, visiting map[string]bool, op
 		return err
 	}
 
-	r.setEnvironmentVars(cmd, opts)
-
 	extraVars := map[string]string{
 		"args": strings.Join(opts.Args, " "),
 	}
 	maps.Copy(extraVars, opts.NamedArgs)
 
-	cleanup, err := r.changeWorkingDir(cmd, extraVars, opts)
+	// Build the command's environment and working directory and attach them to
+	// the child process directly (exec.Cmd.Env / .Dir) rather than mutating
+	// this process's global environment or chdir-ing — both of which race when
+	// commands run in parallel.
+	env, err := r.buildCommandEnv(cmd, opts)
 	if err != nil {
 		return err
 	}
-	if cleanup != nil {
-		defer cleanup()
+	dir, err := r.resolveWorkingDir(cmd, extraVars, opts)
+	if err != nil {
+		return err
 	}
+	execOpts := opts
+	execOpts.Env = env
+	execOpts.Dir = dir
 
-	lastErr := r.executeWithRetry(cmd, extraVars, opts, resolvedName)
+	lastErr := r.executeWithRetry(cmd, extraVars, execOpts, resolvedName)
 
 	// Run post-hooks
 	if len(cmd.Post) > 0 && !opts.IsDependency {
@@ -190,71 +192,102 @@ func (r *Runner) shouldSkipIfUnchanged(name string, cmd Command, opts RunOptions
 	return false
 }
 
-// prepareEnvironment loads global and command-specific dotenv files.
-func (r *Runner) prepareEnvironment(cmd Command, opts RunOptions) error {
-	if err := r.Config.loadEnvFiles(r.Config.Settings.EnvFile, opts); err != nil {
-		return fmt.Errorf("failed to load global env files: %w", err)
-	}
-	if err := r.Config.loadEnvFiles(cmd.EnvFile, opts); err != nil {
-		return fmt.Errorf("failed to load command env files: %w", err)
-	}
-	return nil
-}
+// buildCommandEnv computes the full environment for a command by layering its
+// dotenv files and configured env vars over the current process environment.
+// It does not mutate the process environment, so concurrent commands never
+// clobber one another. The result is a "KEY=VALUE" slice for exec.Cmd.Env.
+func (r *Runner) buildCommandEnv(cmd Command, opts RunOptions) ([]string, error) {
+	env := envMap(os.Environ())
 
-// setEnvironmentVars sets global and command-specific environment variables.
-func (r *Runner) setEnvironmentVars(cmd Command, opts RunOptions) {
-	for key, value := range r.Config.Env {
-		interpolatedValue := r.Config.interpolateVariables(value, nil)
-		if opts.DryRun {
-			if opts.Verbose && !opts.Quiet {
-				fmt.Printf("[dry-run] export %s=%s (global)\n", key, interpolatedValue)
-			}
-		} else {
-			os.Setenv(key, interpolatedValue)
-		}
-	}
-
-	for key, value := range cmd.Env {
-		interpolatedValue := r.Config.interpolateVariables(value, nil)
-		if opts.DryRun {
-			if !opts.Quiet {
-				fmt.Printf("[dry-run] export %s=%s\n", key, interpolatedValue)
-			}
-		} else {
-			os.Setenv(key, interpolatedValue)
-		}
-	}
-}
-
-// changeWorkingDir handles the dir field, returning a cleanup function to
-// restore the original directory.
-func (r *Runner) changeWorkingDir(cmd Command, extraVars map[string]string, opts RunOptions) (func(), error) {
-	if cmd.Dir == "" {
-		return nil, nil
-	}
-
-	originalDir, err := os.Getwd()
+	// Dotenv files: global settings first, then command-specific (later wins).
+	globalVars, err := r.Config.collectEnvFiles(r.Config.Settings.EnvFile, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get current directory: %w", err)
+		return nil, fmt.Errorf("failed to load global env files: %w", err)
+	}
+	maps.Copy(env, globalVars)
+	cmdVars, err := r.Config.collectEnvFiles(cmd.EnvFile, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load command env files: %w", err)
+	}
+	maps.Copy(env, cmdVars)
+
+	// Configured [env] (global) then [commands.x.env] (command wins). These
+	// override dotenv values, matching the previous ordering.
+	r.applyConfigEnv(env, r.Config.Env, opts, true)
+	r.applyConfigEnv(env, cmd.Env, opts, false)
+
+	return envSlice(env), nil
+}
+
+// applyConfigEnv interpolates and overlays configured env vars onto env. In
+// dry-run it prints the export notices and leaves env untouched (the command
+// will not execute), mirroring the previous behavior.
+func (r *Runner) applyConfigEnv(env map[string]string, vars map[string]string, opts RunOptions, global bool) {
+	for key, value := range vars {
+		interpolated := r.Config.interpolateVariables(value, nil)
+		if opts.DryRun {
+			if global {
+				if opts.Verbose && !opts.Quiet {
+					fmt.Printf("[dry-run] export %s=%s (global)\n", key, interpolated)
+				}
+			} else if !opts.Quiet {
+				fmt.Printf("[dry-run] export %s=%s\n", key, interpolated)
+			}
+			continue
+		}
+		env[key] = interpolated
+	}
+}
+
+// resolveWorkingDir computes the absolute working directory for a command's
+// dir field (interpolated, resolved relative to the config dir). It returns ""
+// when no dir is set. It does not chdir the process — the directory is applied
+// to the child via exec.Cmd.Dir, which is safe under parallel execution.
+func (r *Runner) resolveWorkingDir(cmd Command, extraVars map[string]string, opts RunOptions) (string, error) {
+	if cmd.Dir == "" {
+		return "", nil
 	}
 
-	interpolatedDir := r.Config.interpolateVariables(cmd.Dir, extraVars)
-	if !filepath.IsAbs(interpolatedDir) {
-		interpolatedDir = filepath.Join(r.Config.configDir, interpolatedDir)
+	dir := r.Config.interpolateVariables(cmd.Dir, extraVars)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(r.Config.configDir, dir)
 	}
 
 	if opts.DryRun {
 		if !opts.Quiet {
-			fmt.Printf("[dry-run] cd %s\n", interpolatedDir)
+			fmt.Printf("[dry-run] cd %s\n", dir)
 		}
-		return nil, nil
+		return dir, nil
 	}
 
-	if err := os.Chdir(interpolatedDir); err != nil {
-		return nil, fmt.Errorf("failed to change to directory '%s': %w", interpolatedDir, err)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to change to directory '%s': %w", dir, err)
 	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("not a directory: '%s'", dir)
+	}
+	return dir, nil
+}
 
-	return func() { os.Chdir(originalDir) }, nil
+// envMap parses a "KEY=VALUE" environment slice into a map.
+func envMap(environ []string) map[string]string {
+	m := make(map[string]string, len(environ))
+	for _, kv := range environ {
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			m[before] = after
+		}
+	}
+	return m
+}
+
+// envSlice renders an environment map back into a "KEY=VALUE" slice.
+func envSlice(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // runHooks executes pre or post hook commands.
@@ -385,16 +418,41 @@ func (r *Runner) executeCommands(runCommands []string, extraVars map[string]stri
 	return nil
 }
 
-// buildCommand creates an exec.Cmd with the appropriate shell for the platform.
-func buildCommand(ctx context.Context, cmdStr string) *exec.Cmd {
-	switch runtime.GOOS {
-	case "linux", "darwin":
-		return exec.CommandContext(ctx, "bash", "-c", cmdStr)
-	case "windows":
-		return exec.CommandContext(ctx, "cmd", "/C", cmdStr)
-	default:
-		return exec.CommandContext(ctx, "bash", "-c", cmdStr)
+// buildCommand creates an exec.Cmd that runs cmdStr through the configured
+// shell. An empty shell uses the platform default (bash on unix, cmd on
+// windows).
+func buildCommand(ctx context.Context, shell, cmdStr string) *exec.Cmd {
+	name, prefix := shellInvocation(shell)
+	args := append(append([]string{}, prefix...), cmdStr)
+	return exec.CommandContext(ctx, name, args...)
+}
+
+// shellInvocation resolves a shell setting into a command name and the
+// arguments that precede the command string. An empty setting (or "auto" with
+// no $SHELL) falls back to the platform default. A bare binary name gets the
+// conventional command flag (/C for cmd, -c otherwise); a setting containing
+// spaces is used verbatim so flags like "bash -lc" are honored.
+func shellInvocation(shell string) (string, []string) {
+	shell = strings.TrimSpace(shell)
+	if shell == "auto" {
+		shell = strings.TrimSpace(os.Getenv("SHELL"))
 	}
+	if shell == "" {
+		if runtime.GOOS == "windows" {
+			return "cmd", []string{"/C"}
+		}
+		return "bash", []string{"-c"}
+	}
+
+	fields := strings.Fields(shell)
+	bin := fields[0]
+	if len(fields) > 1 {
+		return bin, fields[1:]
+	}
+	if base := strings.ToLower(filepath.Base(bin)); base == "cmd" || base == "cmd.exe" {
+		return bin, []string{"/C"}
+	}
+	return bin, []string{"-c"}
 }
 
 // runWithTimeout executes a single command string with optional timeout,
@@ -409,7 +467,13 @@ func (r *Runner) runWithTimeout(interpolatedCmd string, timeout time.Duration, o
 	}
 	defer cancel()
 
-	cmdline := buildCommand(ctx, interpolatedCmd)
+	cmdline := buildCommand(ctx, r.Config.Settings.Shell, interpolatedCmd)
+	if opts.Env != nil {
+		cmdline.Env = opts.Env
+	}
+	if opts.Dir != "" {
+		cmdline.Dir = opts.Dir
+	}
 	if opts.OutputPrefix != "" {
 		// Multiplexed parallel output: prefix lines, detach stdin.
 		stdout := output.NewPrefixWriter(os.Stdout, opts.OutputPrefix, opts.PrefixColor)

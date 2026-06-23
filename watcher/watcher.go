@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/javanhut/imlazy/glob"
 	"github.com/javanhut/imlazy/output"
 )
 
@@ -19,6 +20,9 @@ type Watcher struct {
 	callback     func() error
 	watcher      *fsnotify.Watcher
 	done         chan struct{}
+
+	timerMu sync.Mutex
+	timer   *time.Timer
 }
 
 // NewWatcher creates a new file watcher
@@ -99,9 +103,6 @@ func (w *Watcher) Start() error {
 // watch is the main event loop that listens for file system events and
 // triggers the callback with debouncing.
 func (w *Watcher) watch() {
-	var timer *time.Timer
-	var timerMu sync.Mutex
-
 	for {
 		select {
 		case event, ok := <-w.watcher.Events:
@@ -119,19 +120,23 @@ func (w *Watcher) watch() {
 				continue
 			}
 
-			// Debounce rapid events
-			timerMu.Lock()
-			if timer != nil {
-				timer.Stop()
+			// Debounce rapid events. The timer lives on the Watcher so Stop()
+			// can cancel a pending fire and avoid re-running after shutdown.
+			// Capture the name now rather than reading event.Name at fire time,
+			// which could otherwise reflect a later event.
+			name := event.Name
+			w.timerMu.Lock()
+			if w.timer != nil {
+				w.timer.Stop()
 			}
-			timer = time.AfterFunc(w.debounceTime, func() {
-				output.PrintInfo("\nFile changed: %s", event.Name)
+			w.timer = time.AfterFunc(w.debounceTime, func() {
+				output.PrintInfo("\nFile changed: %s", name)
 				output.PrintInfo("Re-running command...")
 				if err := w.callback(); err != nil {
 					output.PrintError("Error: %v", err)
 				}
 			})
-			timerMu.Unlock()
+			w.timerMu.Unlock()
 
 		case err, ok := <-w.watcher.Errors:
 			if !ok {
@@ -155,38 +160,13 @@ func (w *Watcher) matchesPattern(path string) bool {
 	}
 
 	for _, pattern := range w.patterns {
-		// Handle ** glob
-		if strings.Contains(pattern, "**") {
-			// Convert ** pattern to a simpler check
-			parts := strings.Split(pattern, "**")
-			if len(parts) == 2 {
-				prefix := strings.TrimSuffix(parts[0], "/")
-				suffix := strings.TrimPrefix(parts[1], "/")
-
-				// Check if path starts with prefix (if any)
-				if prefix != "" && !strings.HasPrefix(relPath, prefix) {
-					continue
-				}
-
-				// Check if path ends with suffix pattern
-				if suffix != "" {
-					matched, _ := filepath.Match(suffix, filepath.Base(relPath))
-					if matched {
-						return true
-					}
-				} else {
-					return true
-				}
-			}
-		} else {
-			// Simple glob matching
-			matched, _ := filepath.Match(pattern, relPath)
-			if matched {
-				return true
-			}
-			// Also try matching just the filename
-			matched, _ = filepath.Match(pattern, filepath.Base(relPath))
-			if matched {
+		if glob.Match(pattern, relPath) {
+			return true
+		}
+		// For patterns without a path separator, also match on the basename so
+		// a bare "*.go" matches files in any watched subdirectory.
+		if !strings.Contains(pattern, "/") {
+			if matched, _ := filepath.Match(pattern, filepath.Base(relPath)); matched {
 				return true
 			}
 		}
@@ -195,8 +175,14 @@ func (w *Watcher) matchesPattern(path string) bool {
 	return false
 }
 
-// Stop stops the watcher
+// Stop stops the watcher and cancels any pending debounced re-run so the
+// callback can't fire after shutdown.
 func (w *Watcher) Stop() {
 	close(w.done)
+	w.timerMu.Lock()
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	w.timerMu.Unlock()
 	w.watcher.Close()
 }

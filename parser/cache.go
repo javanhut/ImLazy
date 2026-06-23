@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/javanhut/imlazy/glob"
 )
 
 // checkIfChanged checks if any files matching the patterns have changed since
@@ -102,26 +104,8 @@ func hashMatchingFiles(patterns []string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// matchGlobPattern matches a path against a pattern with ** support.
+// matchGlobPattern matches a path against a pattern, with full ** support
+// (including suffixes that contain path separators and multiple **).
 func matchGlobPattern(pattern, path string) bool {
-	if strings.Contains(pattern, "**") {
-		parts := strings.Split(pattern, "**")
-		if len(parts) == 2 {
-			prefix := strings.TrimSuffix(parts[0], "/")
-			suffix := strings.TrimPrefix(parts[1], "/")
-
-			if prefix != "" && !strings.HasPrefix(path, prefix) {
-				return false
-			}
-
-			if suffix != "" {
-				matched, _ := filepath.Match(suffix, filepath.Base(path))
-				return matched
-			}
-			return true
-		}
-	}
-
-	matched, _ := filepath.Match(pattern, path)
-	return matched
+	return glob.Match(pattern, path)
 }

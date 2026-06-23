@@ -28,7 +28,25 @@ include = ["ci.toml"]          # Split config across files because one file is t
 env_file = [".env", ".env.local"]  # Load these before running anything
 notify = true                  # Desktop notification for long runs (default on)
 notify_after = "30s"           # How long is "long"
+shell = "ravenshell"           # Shell used to run commands (default: bash)
 ```
+
+### Shell
+
+By default commands run through `bash` (`cmd` on Windows). Set `shell` to run
+them through a different shell instead:
+
+```toml
+[settings]
+shell = "ravenshell"   # bare name → invoked as `ravenshell -c "<command>"`
+# shell = "bash -lc"   # include flags to use them verbatim (login shell here)
+# shell = "auto"       # use whatever $SHELL points at
+```
+
+You can override it for a single run with the `IMLAZY_SHELL` environment
+variable (`IMLAZY_SHELL=sh imlazy build`). Note that non-POSIX shells like
+RavenShell don't expand globs the way bash does (`rm *.o` won't match files) —
+keep that in mind for commands that rely on shell globbing.
 
 ## Variables
 

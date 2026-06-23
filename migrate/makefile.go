@@ -84,6 +84,14 @@ func parseMakefileWithVisited(path string, visited map[string]bool) (*MakefileIR
 	return parseMakefileContent(string(data), filepath.Dir(absPath), visited)
 }
 
+// flushTargets appends each accumulated sibling target to the IR. Targets that
+// share a rule each carry their own copy of the recipe.
+func flushTargets(ir *MakefileIR, targets []*MakeTarget) {
+	for _, t := range targets {
+		ir.Targets = append(ir.Targets, *t)
+	}
+}
+
 // parseMakefileContent parses Makefile content from a string.
 func parseMakefileContent(content string, baseDir string, visited map[string]bool) (*MakefileIR, error) {
 	lines := joinContinuationLines(content)
@@ -98,10 +106,10 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 	)
 
 	var (
-		currentState  state
-		currentTarget *MakeTarget
-		commentBuf    strings.Builder
-		ifDepth       int
+		currentState   state
+		currentTargets []*MakeTarget // sibling targets of one rule sharing a recipe
+		commentBuf     strings.Builder
+		ifDepth        int
 	)
 
 	for i := 0; i < len(lines); i++ {
@@ -112,24 +120,28 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 			if len(line) > 0 && line[0] == '\t' {
 				recipeLine := stripRecipePrefix(line[1:]) // strip leading tab
 				recipeLine = collapseWhitespace(recipeLine)
-				currentTarget.Recipe = append(currentTarget.Recipe, recipeLine)
+				for _, t := range currentTargets {
+					t.Recipe = append(t.Recipe, recipeLine)
+				}
 				continue
 			}
 			// Non-tab, non-empty line → back to NORMAL, re-process
 			if strings.TrimSpace(line) != "" {
-				ir.Targets = append(ir.Targets, *currentTarget)
-				currentTarget = nil
+				flushTargets(ir, currentTargets)
+				currentTargets = nil
 				currentState = stateNormal
 				// fall through to process this line in NORMAL state
 			} else {
 				// blank line inside recipe block — could be end of recipe
 				// peek ahead to see if next line is still recipe
 				if i+1 < len(lines) && len(lines[i+1]) > 0 && lines[i+1][0] == '\t' {
-					currentTarget.Recipe = append(currentTarget.Recipe, "")
+					for _, t := range currentTargets {
+						t.Recipe = append(t.Recipe, "")
+					}
 					continue
 				}
-				ir.Targets = append(ir.Targets, *currentTarget)
-				currentTarget = nil
+				flushTargets(ir, currentTargets)
+				currentTargets = nil
 				currentState = stateNormal
 				continue
 			}
@@ -313,6 +325,9 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 			comment := commentBuf.String()
 			commentBuf.Reset()
 
+			// A rule may name several targets ("a.o b.o: dep"); each gets the
+			// recipe that follows, so track them all instead of only the last.
+			currentTargets = nil
 			for _, tname := range targetNames {
 				t := MakeTarget{
 					Name:          tname,
@@ -321,9 +336,9 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 					IsPattern:     strings.Contains(tname, "%"),
 					IsDotTarget:   strings.HasPrefix(tname, "."),
 				}
-				currentTarget = &t
-				currentState = stateRecipe
+				currentTargets = append(currentTargets, &t)
 			}
+			currentState = stateRecipe
 			continue
 		}
 
@@ -331,9 +346,9 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		commentBuf.Reset()
 	}
 
-	// Flush last target if in recipe state
-	if currentState == stateRecipe && currentTarget != nil {
-		ir.Targets = append(ir.Targets, *currentTarget)
+	// Flush last target(s) if in recipe state
+	if currentState == stateRecipe {
+		flushTargets(ir, currentTargets)
 	}
 
 	// Apply phony flags

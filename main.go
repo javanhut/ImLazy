@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -144,7 +145,7 @@ func main() {
 	// Handle completion command (doesn't need config)
 	if len(remainingArgs) > 0 && remainingArgs[0] == "completion" {
 		if len(remainingArgs) < 2 {
-			output.PrintError("Usage: imlazy completion <bash|zsh|fish|install>")
+			output.PrintError("Usage: imlazy completion <bash|zsh|fish|ravenshell|install>")
 			os.Exit(1)
 		}
 		if remainingArgs[1] == "install" {
@@ -154,6 +155,12 @@ func main() {
 				os.Exit(1)
 			}
 			output.PrintSuccess("%s", msg)
+			return
+		}
+		// Machine-readable command list consumed by RavenShell's dynamic
+		// completion generator: prints one "name<TAB>desc" per line.
+		if remainingArgs[1] == "candidates" {
+			runCompletionCandidates()
 			return
 		}
 		script, err := completion.Generate(remainingArgs[1])
@@ -489,6 +496,50 @@ func runAdd(args []string, passthrough []string) {
 	output.PrintSuccess("Added '%s' to %s", name, path)
 }
 
+// runCompletionCandidates prints the available commands (names and aliases,
+// with descriptions) one per line as "name<TAB>desc", for consumption by
+// RavenShell's dynamic completion generator. It stays quiet and exits cleanly
+// when there is no config so a stray Tab never produces noise.
+func runCompletionCandidates() {
+	info, err := parser.LoadConfig()
+	if err != nil {
+		detected, ok := parser.DetectConfig()
+		if !ok {
+			return
+		}
+		info = detected
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	add := func(name, desc string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	descByName := map[string]string{}
+	for name, cmd := range info.Commands {
+		add(name, cmd.Desc)
+		descByName[name] = cmd.Desc
+		for _, alias := range cmd.Alias {
+			add(alias, cmd.Desc)
+			descByName[alias] = cmd.Desc
+		}
+	}
+
+	sort.Strings(names)
+	for _, name := range names {
+		if desc := descByName[name]; desc != "" {
+			fmt.Printf("%s\t%s\n", name, desc)
+		} else {
+			fmt.Println(name)
+		}
+	}
+}
+
 // runEdit opens the nearest lazy.toml in $EDITOR.
 func runEdit() {
 	path, err := parser.FindConfigPath()
@@ -656,7 +707,7 @@ func printBasicHelp() {
 	fmt.Println("  validate           Validate lazy.toml configuration")
 	fmt.Println("  list [namespace]   List commands (optionally by namespace)")
 	fmt.Println("  watch <cmd>        Watch files and re-run command on changes")
-	fmt.Println("  completion <shell> Generate shell completion (bash, zsh, fish)")
+	fmt.Println("  completion <shell> Generate shell completion (bash, zsh, fish, ravenshell)")
 	fmt.Println("  completion install Install completions for your current shell")
 	fmt.Println("  migrate            Convert Makefile/justfile/Taskfile/package.json to lazy.toml")
 	fmt.Println("  history [n]        Show recent command history")
@@ -704,7 +755,7 @@ func printHelp(info *parser.Config) {
 		{"validate", "Validate lazy.toml configuration"},
 		{"list [ns]", "List commands (optionally by namespace)"},
 		{"watch <cmd>", "Watch files and re-run command on changes"},
-		{"completion", "Generate or install shell completion (bash, zsh, fish)"},
+		{"completion", "Generate or install shell completion (bash, zsh, fish, ravenshell)"},
 		{"migrate", "Convert Makefile/justfile/Taskfile/package.json to lazy.toml"},
 		{"history [n]", "Show recent command history"},
 		{"last, again", "Replay last command from history"},

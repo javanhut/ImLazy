@@ -15,6 +15,12 @@ type Settings struct {
 	EnvFile     []string `toml:"env_file"`
 	Notify      *bool    `toml:"notify"`
 	NotifyAfter string   `toml:"notify_after"`
+	// Shell selects the shell used to run commands. Empty uses the platform
+	// default (bash on unix, cmd on windows). A bare name like "ravenshell" or
+	// "sh" is invoked as "<shell> -c <command>"; include flags to override
+	// (e.g. "bash -lc"). The special value "auto" uses $SHELL. Overridable at
+	// runtime with the IMLAZY_SHELL environment variable.
+	Shell string `toml:"shell"`
 }
 
 // Config represents the full lazy.toml configuration.
@@ -108,6 +114,14 @@ type RunOptions struct {
 	// Service marks a long-running command managed by watch --restart;
 	// it runs in its own process group so it can be killed and restarted.
 	Service bool
+	// Env, when non-nil, is the full environment for the child process. It is
+	// built per-command (layering dotenv files and configured env over the
+	// process environment) so parallel commands never mutate shared global
+	// state. Empty means inherit the process environment.
+	Env []string
+	// Dir, when non-empty, is the working directory for the child process,
+	// applied via exec.Cmd.Dir instead of a process-wide chdir.
+	Dir string
 }
 
 // HistoryEntry represents a command execution in history.

@@ -1,7 +1,9 @@
-// Package completion generates shell completion scripts for bash, zsh, and fish.
+// Package completion generates shell completion scripts for bash, zsh, fish,
+// and RavenShell.
 package completion
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -167,6 +169,82 @@ complete -c imlazy -n '__fish_use_subcommand' -a '(__imlazy_commands)' -d 'Comma
 `
 }
 
+// RavenShell completion spec types. These mirror the JSON schema RavenShell
+// loads from ~/.config/ravenshell/completions/<command>.json.
+type rsItem struct {
+	Text string `json:"text"`
+	Desc string `json:"desc,omitempty"`
+}
+
+type rsArgs struct {
+	Static  []rsItem `json:"static,omitempty"`
+	Command string   `json:"command,omitempty"`
+	NoFiles bool     `json:"noFiles,omitempty"`
+}
+
+type rsSpec struct {
+	Flags []rsItem `json:"flags,omitempty"`
+	Args  *rsArgs  `json:"args,omitempty"`
+}
+
+// Ravenshell returns a RavenShell completion spec (JSON) for imlazy. Built-in
+// subcommands are provided as static positional candidates, and lazy.toml
+// commands are completed dynamically by running `imlazy completion candidates`
+// at completion time. Note: RavenShell offers a spec's positional args at the
+// first word only when no `subcommands` are declared, so everything is placed
+// under `args` rather than `subcommands`.
+func Ravenshell() (string, error) {
+	spec := rsSpec{
+		Flags: []rsItem{
+			{"-n", "Show commands without executing (dry-run)"},
+			{"--dry-run", "Show commands without executing"},
+			{"-q", "Suppress output except errors"},
+			{"--quiet", "Suppress output except errors"},
+			{"-v", "Show detailed output and timing"},
+			{"--verbose", "Show detailed output and timing"},
+			{"-f", "Force execution (ignore if_changed)"},
+			{"--force", "Force execution (ignore if_changed)"},
+			{"-w", "Watch files and re-run on changes"},
+			{"--watch", "Watch files and re-run on changes"},
+			{"-p", "Run multiple commands in parallel"},
+			{"--parallel", "Run multiple commands in parallel"},
+			{"-i", "Open interactive command picker"},
+			{"--interactive", "Open interactive command picker"},
+			{"-V", "Show version information"},
+			{"--version", "Show version information"},
+			{"-h", "Show help message"},
+			{"--help", "Show help message"},
+		},
+		Args: &rsArgs{
+			Static: []rsItem{
+				{"init", "Create a new lazy.toml"},
+				{"add", "Add a command to lazy.toml"},
+				{"edit", "Open lazy.toml in $EDITOR"},
+				{"help", "Show available commands"},
+				{"how", "Show available commands"},
+				{"version", "Show version information"},
+				{"validate", "Validate lazy.toml configuration"},
+				{"list", "List commands (optionally by namespace)"},
+				{"watch", "Watch files and re-run a command on changes"},
+				{"completion", "Generate or install shell completion"},
+				{"migrate", "Convert Makefile/justfile/Taskfile/package.json"},
+				{"history", "Show recent command history"},
+				{"last", "Replay last command"},
+				{"again", "Replay last command"},
+			},
+			// Dynamic lazy.toml commands, one "name<TAB>desc" per line.
+			Command: "imlazy completion candidates",
+			NoFiles: true,
+		},
+	}
+
+	data, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
+}
+
 // Generate outputs the completion script for the given shell
 func Generate(shell string) (string, error) {
 	switch strings.ToLower(shell) {
@@ -176,7 +254,9 @@ func Generate(shell string) (string, error) {
 		return Zsh(), nil
 	case "fish":
 		return Fish(), nil
+	case "ravenshell", "raven":
+		return Ravenshell()
 	default:
-		return "", fmt.Errorf("unsupported shell: %s (supported: bash, zsh, fish)", shell)
+		return "", fmt.Errorf("unsupported shell: %s (supported: bash, zsh, fish, ravenshell)", shell)
 	}
 }

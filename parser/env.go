@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,8 +52,12 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// loadEnvFiles loads environment variables from dotenv files.
-func (c *Config) loadEnvFiles(files []string, opts RunOptions) error {
+// collectEnvFiles reads the given dotenv files into a single key/value map,
+// later files overriding earlier ones. It does not mutate the process
+// environment, so it is safe under parallel execution. Missing files are
+// skipped; in dry-run it only prints notices.
+func (c *Config) collectEnvFiles(files []string, opts RunOptions) (map[string]string, error) {
+	out := map[string]string{}
 	for _, file := range files {
 		path := file
 		if !filepath.IsAbs(path) {
@@ -70,25 +75,29 @@ func (c *Config) loadEnvFiles(files []string, opts RunOptions) error {
 			continue
 		}
 
-		if err := c.loadDotenv(path); err != nil {
-			return fmt.Errorf("failed to load %s: %w", file, err)
+		vars, err := c.readDotenv(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load %s: %w", file, err)
 		}
+		maps.Copy(out, vars)
 
 		if opts.Verbose && !opts.Quiet {
 			fmt.Printf("Loaded env file: %s\n", file)
 		}
 	}
-	return nil
+	return out, nil
 }
 
-// loadDotenv parses and loads a dotenv file into the process environment.
-func (c *Config) loadDotenv(path string) error {
+// readDotenv parses a dotenv file into key/value pairs, with variable
+// interpolation applied to values. It does not mutate the process environment.
+func (c *Config) readDotenv(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 
+	out := map[string]string{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -112,9 +121,22 @@ func (c *Config) loadDotenv(path string) error {
 			}
 		}
 
-		value = c.interpolateVariables(value, nil)
-		os.Setenv(key, value)
+		out[key] = c.interpolateVariables(value, nil)
 	}
 
-	return scanner.Err()
+	return out, scanner.Err()
+}
+
+// loadDotenv parses a dotenv file and applies it to the process environment.
+// Retained for compatibility; the runner builds per-command environments with
+// readDotenv to avoid mutating global state during parallel execution.
+func (c *Config) loadDotenv(path string) error {
+	vars, err := c.readDotenv(path)
+	if err != nil {
+		return err
+	}
+	for k, v := range vars {
+		os.Setenv(k, v)
+	}
+	return nil
 }
