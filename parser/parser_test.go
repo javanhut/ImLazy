@@ -974,6 +974,12 @@ func TestResolveCommand(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for unknown command")
 	}
+
+	// Similar names are suggestions, never silently executed.
+	_, _, err = runner.resolveCommand("buil", RunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "Did you mean") {
+		t.Fatalf("expected a safe suggestion, got %v", err)
+	}
 }
 
 func TestBuildCommand(t *testing.T) {

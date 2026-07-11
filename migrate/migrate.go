@@ -2,7 +2,8 @@
 package migrate
 
 import (
-	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,6 +88,7 @@ func Run(opts MigrateOptions) error {
 	}
 
 	setManagedSourcePath(ir, sourcePath, outputPath)
+	ir.SourceHash = generatedSourceHash(ir)
 	tomlContent := ConvertToTOML(ir)
 
 	if _, err := os.Stat(outputPath); err == nil && !opts.Force {
@@ -103,6 +105,7 @@ func Run(opts MigrateOptions) error {
 }
 
 const managedSourcePrefix = "# imlazy-source: "
+const managedSourceHashPrefix = "# imlazy-source-hash: "
 
 // SyncGenerated refreshes a config created by migrate when its source has
 // changed. Hand-authored configs have no managed-source marker and are never
@@ -112,11 +115,13 @@ func SyncGenerated(configPath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var source string
+	var source, previousHash string
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, managedSourcePrefix) {
 			source = strings.TrimSpace(strings.TrimPrefix(line, managedSourcePrefix))
-			break
+		}
+		if strings.HasPrefix(line, managedSourceHashPrefix) {
+			previousHash = strings.TrimSpace(strings.TrimPrefix(line, managedSourceHashPrefix))
 		}
 	}
 	if source == "" {
@@ -130,33 +135,72 @@ func SyncGenerated(configPath string) (bool, error) {
 		return false, fmt.Errorf("cannot re-sync %s: %w", configPath, err)
 	}
 	setManagedSourcePath(ir, source, configPath)
-	updated := []byte(ConvertToTOML(ir))
-	if bytes.Equal(data, updated) {
+	currentHash := generatedSourceHash(ir)
+	// Upgrade configs generated before source fingerprints were introduced.
+	// Establish the current source as the baseline without replacing any
+	// commands the user may have added to the managed file.
+	if previousHash == "" {
+		upgraded := insertSourceHash(data, currentHash)
+		if err := atomicWritePreservingMode(configPath, upgraded); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
-	info, err := os.Stat(configPath)
-	if err != nil {
+	if previousHash == currentHash {
+		return false, nil
+	}
+	ir.SourceHash = currentHash
+	updated := []byte(ConvertToTOML(ir))
+	if err := atomicWritePreservingMode(configPath, updated); err != nil {
 		return false, err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(configPath), ".lazy.toml-sync-*")
+	return true, nil
+}
+
+func generatedSourceHash(ir *MakefileIR) string {
+	previous := ir.SourceHash
+	ir.SourceHash = ""
+	canonical := ConvertToTOML(ir)
+	ir.SourceHash = previous
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])
+}
+
+func insertSourceHash(data []byte, hash string) []byte {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, managedSourcePrefix) {
+			lines = append(lines[:i+1], append([]string{managedSourceHashPrefix + hash}, lines[i+1:]...)...)
+			break
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func atomicWritePreservingMode(path string, data []byte) error {
+	info, err := os.Stat(path)
 	if err != nil {
-		return false, err
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".lazy.toml-sync-*")
+	if err != nil {
+		return err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err = tmp.Write(updated); err == nil {
+	if _, err = tmp.Write(data); err == nil {
 		err = tmp.Chmod(info.Mode())
 	}
 	if closeErr := tmp.Close(); err == nil {
 		err = closeErr
 	}
 	if err == nil {
-		err = os.Rename(tmpName, configPath)
+		err = os.Rename(tmpName, path)
 	}
 	if err != nil {
-		return false, fmt.Errorf("failed to re-sync %s: %w", configPath, err)
+		return fmt.Errorf("failed to re-sync %s: %w", path, err)
 	}
-	return true, nil
+	return nil
 }
 
 func setManagedSourcePath(ir *MakefileIR, sourcePath, outputPath string) {

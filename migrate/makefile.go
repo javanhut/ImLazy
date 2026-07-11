@@ -38,6 +38,7 @@ type MakefileIR struct {
 	Warnings    []string
 	Source      string // e.g. "Makefile", "justfile", "Taskfile", "package.json"
 	SourcePath  string // path used for managed re-sync (relative to lazy.toml when possible)
+	SourceHash  string // fingerprint of generated content from the migration source
 }
 
 // imlazyBuiltins are command names reserved by ImLazy.

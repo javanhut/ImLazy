@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -187,15 +188,10 @@ func (r *Runner) resolveCommand(name string, opts RunOptions) (string, Command, 
 		return resolvedName, cmd, nil
 	}
 
-	if match := r.Config.FuzzyMatch(name); match != "" {
-		if !opts.Quiet {
-			output.PrintInfo("Fuzzy matched '%s' to '%s'", name, match)
-		}
-		cmd, _ = r.Config.Commands[match]
-		return match, cmd, nil
-	}
-
 	suggestions := r.Config.findSimilarCommands(name)
+	if match := r.Config.FuzzyMatch(name); match != "" && !slices.Contains(suggestions, match) {
+		suggestions = append([]string{match}, suggestions...)
+	}
 	if len(suggestions) > 0 {
 		return "", Command{}, fmt.Errorf("command not found: '%s'\nDid you mean: %s?", name, strings.Join(suggestions, ", "))
 	}
