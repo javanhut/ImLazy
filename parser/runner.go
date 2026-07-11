@@ -27,6 +27,32 @@ type Runner struct {
 	killed      bool
 }
 
+type dependencyResult struct {
+	done chan struct{}
+	err  error
+}
+
+type dependencyExecutionState struct {
+	mu      sync.Mutex
+	results map[string]*dependencyResult
+}
+
+func (s *dependencyExecutionState) do(name string, run func() error) error {
+	s.mu.Lock()
+	if result, ok := s.results[name]; ok {
+		s.mu.Unlock()
+		<-result.done
+		return result.err
+	}
+	result := &dependencyResult{done: make(chan struct{})}
+	s.results[name] = result
+	s.mu.Unlock()
+
+	result.err = run()
+	close(result.done)
+	return result.err
+}
+
 // NewRunner creates a Runner bound to the given Config.
 func NewRunner(cfg *Config) *Runner {
 	return &Runner{Config: cfg}
@@ -39,6 +65,7 @@ func (r *Runner) RunCommand(name string) error {
 
 // RunCommandWithOptions executes a command with the specified options.
 func (r *Runner) RunCommandWithOptions(name string, opts RunOptions) error {
+	opts.dependencyState = &dependencyExecutionState{results: make(map[string]*dependencyResult)}
 	return r.runCommandWithVisited(name, make(map[string]bool), opts)
 }
 
@@ -67,9 +94,16 @@ func (r *Runner) runCommandWithVisited(name string, visiting map[string]bool, op
 	if visiting[resolvedName] {
 		return fmt.Errorf("circular dependency detected: %s", resolvedName)
 	}
+	if opts.IsDependency && opts.dependencyState != nil && !opts.skipDependencyCache {
+		return opts.dependencyState.do(resolvedName, func() error {
+			ownerOpts := opts
+			ownerOpts.skipDependencyCache = true
+			return r.runCommandWithVisited(resolvedName, visiting, ownerOpts)
+		})
+	}
 
 	runCommands := cmd.Run.GetForCurrentPlatform()
-	if len(runCommands) == 0 {
+	if len(runCommands) == 0 && len(cmd.Dep) == 0 {
 		return fmt.Errorf("no run commands defined for '%s'", resolvedName)
 	}
 

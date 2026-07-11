@@ -121,6 +121,11 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 			if len(line) > 0 && line[0] == '\t' {
 				recipeLine := stripRecipePrefix(line[1:]) // strip leading tab
 				recipeLine = collapseWhitespace(recipeLine)
+				// Tab-indented comments document recipes; they are not shell
+				// commands and should not appear in lazy.toml's run array.
+				if strings.HasPrefix(strings.TrimSpace(recipeLine), "#") {
+					continue
+				}
 				for _, t := range currentTargets {
 					t.Recipe = append(t.Recipe, recipeLine)
 				}
@@ -272,7 +277,7 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 			if m := varAssignRe.FindStringSubmatch("export " + rest); m != nil {
 				ir.Variables = append(ir.Variables, MakeVar{
 					Name:   m[2],
-					Value:  collapseWhitespace(strings.TrimSpace(m[4])),
+					Value:  collapseWhitespace(stripMakeComment(m[4])),
 					Flavor: m[3],
 					Export: true,
 				})
@@ -303,7 +308,7 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		if m := varAssignRe.FindStringSubmatch(trimmed); m != nil && m[1] == "" {
 			ir.Variables = append(ir.Variables, MakeVar{
 				Name:   m[2],
-				Value:  collapseWhitespace(strings.TrimSpace(m[4])),
+				Value:  collapseWhitespace(stripMakeComment(m[4])),
 				Flavor: m[3],
 			})
 			commentBuf.Reset()
@@ -373,6 +378,25 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 	}
 
 	return ir, nil
+}
+
+// stripMakeComment removes an unescaped Make comment from an assignment.
+// This keeps `MAIN := main.go # explanation` from turning the explanation
+// into part of every migrated command that references MAIN.
+func stripMakeComment(value string) string {
+	for i := 0; i < len(value); i++ {
+		if value[i] != '#' {
+			continue
+		}
+		backslashes := 0
+		for j := i - 1; j >= 0 && value[j] == '\\'; j-- {
+			backslashes++
+		}
+		if backslashes%2 == 0 {
+			return strings.TrimSpace(value[:i])
+		}
+	}
+	return strings.TrimSpace(value)
 }
 
 // deduplicateVars removes duplicate variable entries, keeping the last

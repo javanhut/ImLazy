@@ -60,6 +60,27 @@ func TestParseVariableAssignment(t *testing.T) {
 	}
 }
 
+func TestAssignmentInlineCommentIsRemoved(t *testing.T) {
+	ir, err := parseMakefileContent("MAIN := main.go # entry point\n", ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ir.Variables) != 1 || ir.Variables[0].Value != "main.go" {
+		t.Fatalf("unexpected variables: %#v", ir.Variables)
+	}
+}
+
+func TestRecipeCommentsAreNotCommands(t *testing.T) {
+	input := "build:\n\t# Explain the build\n\tgo build ./...\n"
+	ir, err := parseMakefileContent(input, ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ir.Targets) != 1 || len(ir.Targets[0].Recipe) != 1 || ir.Targets[0].Recipe[0] != "go build ./..." {
+		t.Fatalf("unexpected recipe: %#v", ir.Targets)
+	}
+}
+
 func TestParsePhonyTargets(t *testing.T) {
 	input := `.PHONY: all clean test
 

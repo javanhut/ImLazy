@@ -121,7 +121,9 @@ type RunOptions struct {
 	Env []string
 	// Dir, when non-empty, is the working directory for the child process,
 	// applied via exec.Cmd.Dir instead of a process-wide chdir.
-	Dir string
+	Dir                 string
+	dependencyState     *dependencyExecutionState
+	skipDependencyCache bool
 }
 
 // HistoryEntry represents a command execution in history.
