@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/javanhut/imlazy/output"
@@ -106,22 +107,25 @@ func Run(opts MigrateOptions) error {
 
 const managedSourcePrefix = "# imlazy-source: "
 const managedSourceHashPrefix = "# imlazy-source-hash: "
+const legacyLocalConfig = ".lazy.local.toml"
 
 // SyncGenerated refreshes a config created by migrate when its source has
 // changed. Hand-authored configs have no managed-source marker and are never
-// touched. It returns true when the file was rewritten.
+// touched. Only the section above the generated-end marker is rewritten;
+// commands the user added below it are preserved and win over same-named
+// source targets. It returns true when the file was rewritten.
 func SyncGenerated(configPath string) (bool, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return false, err
 	}
 	var source, previousHash string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, managedSourcePrefix) {
-			source = strings.TrimSpace(strings.TrimPrefix(line, managedSourcePrefix))
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if after, ok := strings.CutPrefix(line, managedSourcePrefix); ok {
+			source = strings.TrimSpace(after)
 		}
-		if strings.HasPrefix(line, managedSourceHashPrefix) {
-			previousHash = strings.TrimSpace(strings.TrimPrefix(line, managedSourceHashPrefix))
+		if after, ok := strings.CutPrefix(line, managedSourceHashPrefix); ok {
+			previousHash = strings.TrimSpace(after)
 		}
 	}
 	if source == "" {
@@ -150,11 +154,81 @@ func SyncGenerated(configPath string) (bool, error) {
 		return false, nil
 	}
 	ir.SourceHash = currentHash
-	updated := []byte(ConvertToTOML(ir))
-	if err := atomicWritePreservingMode(configPath, updated); err != nil {
+	tail, cleanup := userTail(string(data), configPath, ir)
+	generated := convertToTOMLExcluding(ir, commandNamesIn(tail))
+	if tail != "" {
+		generated += "\n" + tail
+	}
+	if err := atomicWritePreservingMode(configPath, []byte(generated)); err != nil {
 		return false, err
 	}
+	cleanup()
 	return true, nil
+}
+
+// userTail extracts the user-authored portion of an existing managed config:
+// everything below the generated-end marker. Configs written before the marker
+// existed instead keep every command table the current generation doesn't
+// produce (a target deleted from the source is indistinguishable from a user
+// command there, and keeping is safer than deleting). A .lazy.local.toml left
+// over from the old include-based scheme is folded in; the returned cleanup
+// removes it once the merged config is safely written.
+func userTail(data, configPath string, ir *MakefileIR) (string, func()) {
+	tail := ""
+	if _, after, found := strings.Cut(data, generatedEndMarker); found {
+		tail = strings.TrimLeft(after, "\n")
+	} else {
+		tail = commandBlocks(data, generatedNames(ir))
+	}
+	cleanup := func() {}
+	localPath := filepath.Join(filepath.Dir(configPath), legacyLocalConfig)
+	if localData, err := os.ReadFile(localPath); err == nil {
+		tail += commandBlocks(string(localData), commandNamesIn(tail))
+		cleanup = func() { os.Remove(localPath) }
+	}
+	return tail, cleanup
+}
+
+var commandTableRe = regexp.MustCompile(`^\[commands\.(?:"([^"]*)"|([^\]"]+))\]\s*$`)
+
+// commandBlocks returns the [commands.*] tables in text whose names are not in
+// skip, each including the lines up to the next TOML table.
+func commandBlocks(text string, skip map[string]bool) string {
+	var b strings.Builder
+	keep := false
+	for line := range strings.SplitSeq(text, "\n") {
+		if m := commandTableRe.FindStringSubmatch(line); m != nil {
+			keep = !skip[m[1]+m[2]]
+		} else if strings.HasPrefix(line, "[") {
+			keep = false
+		}
+		if keep {
+			b.WriteString(line + "\n")
+		}
+	}
+	return b.String()
+}
+
+// commandNamesIn returns the names of all [commands.*] tables in text.
+func commandNamesIn(text string) map[string]bool {
+	names := make(map[string]bool)
+	for line := range strings.SplitSeq(text, "\n") {
+		if m := commandTableRe.FindStringSubmatch(line); m != nil {
+			names[m[1]+m[2]] = true
+		}
+	}
+	return names
+}
+
+// generatedNames returns the command names the current source would generate.
+func generatedNames(ir *MakefileIR) map[string]bool {
+	names := make(map[string]bool)
+	for _, t := range mergeTargets(ir.Targets) {
+		if !ShouldSkipTarget(t) {
+			names[SanitizeTargetName(t.Name)] = true
+		}
+	}
+	return names
 }
 
 func generatedSourceHash(ir *MakefileIR) string {

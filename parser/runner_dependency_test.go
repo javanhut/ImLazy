@@ -33,9 +33,7 @@ func TestDependencyExecutionStateRunsSharedDependencyOnce(t *testing.T) {
 	var calls atomic.Int32
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := state.do("setup", func() error {
 				calls.Add(1)
 				time.Sleep(5 * time.Millisecond)
@@ -43,7 +41,7 @@ func TestDependencyExecutionStateRunsSharedDependencyOnce(t *testing.T) {
 			}); err != nil {
 				t.Errorf("dependency failed: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if got := calls.Load(); got != 1 {

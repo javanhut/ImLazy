@@ -6,8 +6,20 @@ import (
 	"strings"
 )
 
+// generatedEndMarker separates the machine-managed section of a migrated
+// lazy.toml from user-authored commands. Sync rewrites everything above the
+// marker and preserves everything below it verbatim.
+const generatedEndMarker = "# imlazy-generated-end: everything below this line is yours and survives re-sync"
+
 // ConvertToTOML generates a lazy.toml string from a MakefileIR.
 func ConvertToTOML(ir *MakefileIR) string {
+	return convertToTOMLExcluding(ir, nil)
+}
+
+// convertToTOMLExcluding generates a lazy.toml string, skipping command tables
+// whose names are in skip (used when a user-authored command below the
+// generated-end marker overrides a source target of the same name).
+func convertToTOMLExcluding(ir *MakefileIR, skip map[string]bool) string {
 	var b strings.Builder
 
 	source := ir.Source
@@ -33,10 +45,14 @@ func ConvertToTOML(ir *MakefileIR) string {
 	writeEnv(&b, ir)
 
 	// [commands]
-	writeCommands(&b, ir)
+	writeCommands(&b, ir, skip)
 
 	// Warnings as comments at the end
 	writeWarnings(&b, ir)
+
+	if ir.SourcePath != "" {
+		b.WriteString(generatedEndMarker + "\n")
+	}
 
 	return b.String()
 }
@@ -47,9 +63,6 @@ func writeSettings(b *strings.Builder, ir *MakefileIR) {
 	if ir.DefaultGoal != "" {
 		sanitized := SanitizeTargetName(ir.DefaultGoal)
 		b.WriteString(fmt.Sprintf("default = %q\n", sanitized))
-	}
-	if ir.SourcePath != "" {
-		b.WriteString("include = [\".lazy.local.toml\"]\n")
 	}
 	b.WriteString("\n")
 }
@@ -86,7 +99,7 @@ func writeEnv(b *strings.Builder, ir *MakefileIR) {
 }
 
 // writeCommands writes the [commands] section, converting Make targets to ImLazy commands.
-func writeCommands(b *strings.Builder, ir *MakefileIR) {
+func writeCommands(b *strings.Builder, ir *MakefileIR, skip map[string]bool) {
 	targets := mergeTargets(ir.Targets)
 	// Build set of target names for dependency resolution
 	targetNames := make(map[string]bool)
@@ -104,6 +117,11 @@ func writeCommands(b *strings.Builder, ir *MakefileIR) {
 		}
 
 		name := SanitizeTargetName(t.Name)
+		if skip[name] {
+			// The user defined their own command with this name below the
+			// marker; emitting the generated one would be a duplicate table.
+			continue
+		}
 		if strings.Contains(name, ":") {
 			// Namespaced names (npm-style "test:watch") need quoted keys.
 			b.WriteString(fmt.Sprintf("[commands.%q]\n", name))

@@ -3,13 +3,9 @@ package parser
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
-
-const managedSourceMarker = "# imlazy-source: "
-const localConfigName = ".lazy.local.toml"
 
 var commandNameRe = regexp.MustCompile(`^[A-Za-z0-9_:-]+$`)
 
@@ -45,31 +41,6 @@ func AddToConfig(name string, runCmds []string, desc string, aliases []string) (
 		}
 		if _, exists := cfg.Commands[name]; exists {
 			return "", fmt.Errorf("command '%s' already exists in %s", name, configPath)
-		}
-
-		// Migrated lazy.toml files are regenerated when their source changes.
-		// Keep user-authored commands in the included local file so a Makefile
-		// refresh can never erase commands added through the CLI.
-		data, readErr := os.ReadFile(configPath)
-		if readErr != nil {
-			return "", readErr
-		}
-		if strings.Contains(string(data), managedSourceMarker) {
-			if !strings.Contains(string(data), `"`+localConfigName+`"`) {
-				updated := strings.Replace(string(data), "[settings]\n", "[settings]\ninclude = [\""+localConfigName+"\"]\n", 1)
-				if updated == string(data) {
-					return "", fmt.Errorf("managed config %s has no [settings] section", configPath)
-				}
-				if writeErr := os.WriteFile(configPath, []byte(updated), 0644); writeErr != nil {
-					return "", writeErr
-				}
-			}
-			configPath = filepath.Join(filepath.Dir(configPath), localConfigName)
-			if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
-				if writeErr := os.WriteFile(configPath, []byte("# User commands preserved across migration syncs\n"), 0644); writeErr != nil {
-					return "", writeErr
-				}
-			}
 		}
 	}
 
