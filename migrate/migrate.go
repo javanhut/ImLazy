@@ -2,6 +2,7 @@
 package migrate
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,12 +60,9 @@ func Run(opts MigrateOptions) error {
 		}
 	}
 
-	// Convert to TOML
-	tomlContent := ConvertToTOML(ir)
-
 	// Count converted commands for summary
 	commandCount := 0
-	for _, t := range ir.Targets {
+	for _, t := range mergeTargets(ir.Targets) {
 		if !ShouldSkipTarget(t) {
 			commandCount++
 		}
@@ -72,6 +70,8 @@ func Run(opts MigrateOptions) error {
 
 	// Dry run — print to stdout
 	if opts.DryRun {
+		ir.SourcePath = sourcePath
+		tomlContent := ConvertToTOML(ir)
 		fmt.Print(tomlContent)
 		return nil
 	}
@@ -86,6 +86,9 @@ func Run(opts MigrateOptions) error {
 		outputPath = filepath.Join(cwd, outputPath)
 	}
 
+	setManagedSourcePath(ir, sourcePath, outputPath)
+	tomlContent := ConvertToTOML(ir)
+
 	if _, err := os.Stat(outputPath); err == nil && !opts.Force {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", opts.OutputPath)
 	}
@@ -97,6 +100,77 @@ func Run(opts MigrateOptions) error {
 
 	output.PrintSuccess("Migrated %s → %s (%d commands)", sourcePath, opts.OutputPath, commandCount)
 	return nil
+}
+
+const managedSourcePrefix = "# imlazy-source: "
+
+// SyncGenerated refreshes a config created by migrate when its source has
+// changed. Hand-authored configs have no managed-source marker and are never
+// touched. It returns true when the file was rewritten.
+func SyncGenerated(configPath string) (bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, err
+	}
+	var source string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, managedSourcePrefix) {
+			source = strings.TrimSpace(strings.TrimPrefix(line, managedSourcePrefix))
+			break
+		}
+	}
+	if source == "" {
+		return false, nil
+	}
+	if !filepath.IsAbs(source) {
+		source = filepath.Join(filepath.Dir(configPath), filepath.FromSlash(source))
+	}
+	ir, err := parseSource(source)
+	if err != nil {
+		return false, fmt.Errorf("cannot re-sync %s: %w", configPath, err)
+	}
+	setManagedSourcePath(ir, source, configPath)
+	updated := []byte(ConvertToTOML(ir))
+	if bytes.Equal(data, updated) {
+		return false, nil
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return false, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(configPath), ".lazy.toml-sync-*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err = tmp.Write(updated); err == nil {
+		err = tmp.Chmod(info.Mode())
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, configPath)
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to re-sync %s: %w", configPath, err)
+	}
+	return true, nil
+}
+
+func setManagedSourcePath(ir *MakefileIR, sourcePath, outputPath string) {
+	absSource, err := filepath.Abs(sourcePath)
+	if err != nil {
+		ir.SourcePath = sourcePath
+		return
+	}
+	rel, err := filepath.Rel(filepath.Dir(outputPath), absSource)
+	if err == nil {
+		ir.SourcePath = rel
+	} else {
+		ir.SourcePath = absSource
+	}
 }
 
 // ParseArgs parses migrate-specific arguments from the command line.

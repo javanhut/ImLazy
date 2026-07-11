@@ -28,6 +28,59 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+func TestSyncGeneratedRefreshesChangedMakefile(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "Makefile")
+	config := filepath.Join(dir, "lazy.toml")
+	if err := os.WriteFile(source, []byte(".PHONY: all build\nall: build\nbuild:\n\tgo build\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(MigrateOptions{SourcePath: source, OutputPath: config}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte(".PHONY: all build test\nall: build test\nbuild:\n\tgo build\ntest:\n\tgo test ./...\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := SyncGenerated(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !synced {
+		t.Fatal("expected generated config to be refreshed")
+	}
+	data, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "[commands.test]") || !strings.Contains(text, `dep = ["build", "test"]`) {
+		t.Fatalf("updated targets were not synchronized:\n%s", text)
+	}
+	if synced, err = SyncGenerated(config); err != nil || synced {
+		t.Fatalf("unchanged config should not be rewritten: synced=%v err=%v", synced, err)
+	}
+}
+
+func TestSyncGeneratedLeavesHandWrittenConfigUntouched(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "lazy.toml")
+	original := []byte("[commands.hello]\nrun = [\"echo hi\"]\n")
+	if err := os.WriteFile(config, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := SyncGenerated(config)
+	if err != nil || synced {
+		t.Fatalf("synced=%v err=%v", synced, err)
+	}
+	got, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatal("hand-written config changed")
+	}
+}
+
 func TestParseArgsDefaults(t *testing.T) {
 	opts := ParseArgs(nil)
 

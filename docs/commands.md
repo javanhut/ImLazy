@@ -359,6 +359,12 @@ Auto-discovers, in priority order:
 | `--dry-run` / `-n` | Print the generated TOML to stdout without writing |
 | `--verbose` / `-V` | Show conversion details (variable/target counts, warnings) |
 
+Configs created by `imlazy migrate` are managed snapshots. ImLazy records the
+source path and checks it whenever the config is loaded. If the Makefile
+(including included Makefiles), justfile, Taskfile, or `package.json` changes,
+commands are re-parsed and `lazy.toml` is refreshed atomically. Hand-written
+configs without the generated source marker are never modified automatically.
+
 ### What Gets Converted
 
 From a **Makefile**:

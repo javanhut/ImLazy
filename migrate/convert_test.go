@@ -294,3 +294,26 @@ func TestFilterDeps(t *testing.T) {
 		t.Errorf("got %v", deps)
 	}
 }
+
+func TestRepeatedTargetRulesAreMerged(t *testing.T) {
+	ir := &MakefileIR{Targets: []MakeTarget{
+		{Name: "all", Prerequisites: []string{"build"}, IsPhony: true},
+		{Name: "all", Prerequisites: []string{"test"}, Recipe: []string{"echo done"}},
+		{Name: "build", Recipe: []string{"go build"}, IsPhony: true},
+		{Name: "test", Recipe: []string{"go test ./..."}, IsPhony: true},
+	}}
+	toml := ConvertToTOML(ir)
+	if strings.Count(toml, "[commands.all]") != 1 {
+		t.Fatalf("expected one merged all table:\n%s", toml)
+	}
+	if !strings.Contains(toml, `dep = ["build", "test"]`) {
+		t.Fatalf("expected merged prerequisites:\n%s", toml)
+	}
+}
+
+func TestRecursiveMakeUsesExecutable(t *testing.T) {
+	got := ConvertVarRefs(`$(MAKE) -C services/api all`, &MakefileIR{}, &MakeTarget{Name: "nested"})
+	if got != "make -C services/api all" {
+		t.Fatalf("got %q", got)
+	}
+}

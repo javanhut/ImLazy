@@ -37,6 +37,7 @@ type MakefileIR struct {
 	Includes    []string
 	Warnings    []string
 	Source      string // e.g. "Makefile", "justfile", "Taskfile", "package.json"
+	SourcePath  string // path used for managed re-sync (relative to lazy.toml when possible)
 }
 
 // imlazyBuiltins are command names reserved by ImLazy.
@@ -447,6 +448,10 @@ func collapseWhitespace(s string) string {
 // ConvertVarRefs converts Makefile variable references to ImLazy format.
 // $(VAR) → {{var}}, $(shell cmd) → $(cmd), automatic vars expanded.
 func ConvertVarRefs(s string, ir *MakefileIR, target *MakeTarget) string {
+	// Recursive recipes conventionally use $(MAKE). It is make's executable,
+	// not a user-configurable template variable.
+	s = strings.ReplaceAll(s, "$(MAKE)", "make")
+	s = strings.ReplaceAll(s, "${MAKE}", "make")
 	// Convert $(shell cmd) → $(cmd)
 	s = shellFuncRe.ReplaceAllString(s, "$($1)")
 

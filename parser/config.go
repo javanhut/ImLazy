@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/javanhut/imlazy/migrate"
 	"github.com/javanhut/imlazy/output"
 )
 
@@ -16,6 +17,11 @@ func LoadConfig() (*Config, error) {
 	configPath, err := findConfigFile()
 	if err != nil {
 		return nil, err
+	}
+	if synced, syncErr := migrate.SyncGenerated(configPath); syncErr != nil {
+		return nil, syncErr
+	} else if synced {
+		output.PrintInfo("Re-synced commands from migration source")
 	}
 	return loadConfigFromPath(configPath, make(map[string]bool))
 }
