@@ -71,6 +71,79 @@ func TestInterpolateVariables(t *testing.T) {
 	}
 }
 
+func TestInterpolateNestedVariables(t *testing.T) {
+	// Mirrors a Makefile-migrated config: bindir is defined in terms of
+	// prefix, and commands only ever reference bindir.
+	cfg := &Config{
+		Variables: map[string]string{
+			"prefix": "/usr/local",
+			"bindir": "{{prefix}}/bin",
+			"binary": "ivaldi",
+			"target": "target/release/{{binary}}",
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		extra    map[string]string
+		expected string
+	}{
+		{
+			name:     "nested variable resolves fully",
+			input:    "install -m 755 {{target}} {{bindir}}/{{binary}}",
+			expected: "install -m 755 target/release/ivaldi /usr/local/bin/ivaldi",
+		},
+		{
+			name:     "uninstall matches install path",
+			input:    "rm -f {{bindir}}/{{binary}}",
+			expected: "rm -f /usr/local/bin/ivaldi",
+		},
+		{
+			name:     "runtime override reaches nested variable",
+			input:    "rm -f {{bindir}}/{{binary}}",
+			extra:    map[string]string{"prefix": "/opt/ivaldi"},
+			expected: "rm -f /opt/ivaldi/bin/ivaldi",
+		},
+		{
+			name:     "no placeholder survives expansion",
+			input:    "echo {{bindir}}",
+			expected: "echo /usr/local/bin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := cfg.interpolateVariables(tt.input, tt.extra)
+			if result != tt.expected {
+				t.Errorf("interpolateVariables(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+			if strings.Contains(result, "{{") {
+				t.Errorf("interpolateVariables(%q) left an unresolved placeholder: %q", tt.input, result)
+			}
+		})
+	}
+}
+
+func TestInterpolateCyclicVariables(t *testing.T) {
+	cfg := &Config{
+		Variables: map[string]string{
+			"a":    "{{b}}",
+			"b":    "{{a}}",
+			"self": "x{{self}}",
+		},
+	}
+
+	// A cycle must terminate and leave the placeholder literal so
+	// resolvePlaceholders can prompt, rather than recursing forever.
+	for _, input := range []string{"echo {{a}}", "echo {{self}}"} {
+		result := cfg.interpolateVariables(input, nil)
+		if !strings.Contains(result, "{{") {
+			t.Errorf("interpolateVariables(%q) = %q, want an unresolved placeholder", input, result)
+		}
+	}
+}
+
 func TestBuildAliasMap(t *testing.T) {
 	cfg := &Config{
 		Commands: map[string]Command{

@@ -65,6 +65,33 @@ Use them with `{{name}}`:
 run = ["go build -o {{output_dir}}/{{name}}"]
 ```
 
+Variables can reference other variables. They're expanded all the way down, so
+you define the base once and derive the rest:
+
+```toml
+[variables]
+prefix = "/usr/local"
+bindir = "{{prefix}}/bin"
+binary = "ivaldi"
+
+[commands.install]
+run = ["install -m 755 target/release/{{binary}} {{bindir}}/{{binary}}"]
+
+[commands.uninstall]
+run = ["rm -f {{bindir}}/{{binary}}"]
+```
+
+Both commands resolve to `/usr/local/bin/ivaldi` with no prompting. Override
+the base at runtime with `key=value` and every variable derived from it follows:
+
+```bash
+imlazy install prefix=/opt/ivaldi     # -> /opt/ivaldi/bin/ivaldi
+imlazy uninstall prefix=/opt/ivaldi   # -> /opt/ivaldi/bin/ivaldi
+```
+
+A variable that refers to itself (directly or in a loop) is left as a literal
+`{{placeholder}}` rather than expanding forever.
+
 ### Built-in Variables
 
 These exist automatically. You're welcome.

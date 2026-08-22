@@ -6,35 +6,69 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 )
 
+// maxInterpolationDepth bounds nested variable expansion. Cycles are caught by
+// the resolving set; this is a second backstop against pathological configs.
+const maxInterpolationDepth = 32
+
 // interpolateVariables replaces {{var}} patterns in a string with their values.
+// Values may themselves reference other variables (bindir = "{{prefix}}/bin"),
+// so expansion is applied recursively until no known placeholders remain.
+// Unknown placeholders and cyclic references are left literal for
+// resolvePlaceholders to prompt for.
 func (c *Config) interpolateVariables(input string, extraVars map[string]string) string {
-	builtins := map[string]string{
-		"os":   runtime.GOOS,
-		"arch": runtime.GOARCH,
-		"cwd":  getCwd(),
+	return c.expandVariables(input, extraVars, map[string]bool{}, 0)
+}
+
+// expandVariables performs one pass of substitution, recursing into each
+// replacement value. resolving holds the variables currently being expanded on
+// this branch so a cycle (a = "{{b}}", b = "{{a}}") terminates instead of
+// recursing forever.
+func (c *Config) expandVariables(input string, extraVars map[string]string, resolving map[string]bool, depth int) string {
+	if depth >= maxInterpolationDepth || !strings.Contains(input, "{{") {
+		return input
 	}
 
-	re := regexp.MustCompile(`\{\{(\w+)\}\}`)
-
-	return re.ReplaceAllStringFunc(input, func(match string) string {
+	return placeholderRe.ReplaceAllStringFunc(input, func(match string) string {
 		varName := match[2 : len(match)-2]
 
-		if val, ok := extraVars[varName]; ok {
-			return val
+		if resolving[varName] {
+			return match
 		}
-		if val, ok := c.Variables[varName]; ok {
-			return val
+
+		value, ok := c.lookupVariable(varName, extraVars)
+		if !ok {
+			return match
 		}
-		if val, ok := builtins[varName]; ok {
-			return val
-		}
-		return match
+
+		resolving[varName] = true
+		defer delete(resolving, varName)
+
+		return c.expandVariables(value, extraVars, resolving, depth+1)
 	})
+}
+
+// lookupVariable resolves a variable name against runtime args, the config's
+// [variables] table, and the built-ins, in that order.
+func (c *Config) lookupVariable(name string, extraVars map[string]string) (string, bool) {
+	if val, ok := extraVars[name]; ok {
+		return val, true
+	}
+	if val, ok := c.Variables[name]; ok {
+		return val, true
+	}
+	switch name {
+	case "os":
+		return runtime.GOOS, true
+	case "arch":
+		return runtime.GOARCH, true
+	case "cwd":
+		return getCwd(), true
+	}
+	return "", false
 }
 
 // getCwd returns the current working directory or an empty string on error.
