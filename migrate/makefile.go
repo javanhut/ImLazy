@@ -36,7 +36,8 @@ type MakefileIR struct {
 	DefaultGoal string
 	Includes    []string
 	Warnings    []string
-	Source      string // e.g. "Makefile", "justfile", "Taskfile", "package.json"
+	Notes       []string // informational: values resolved at migrate time
+	Source      string   // e.g. "Makefile", "justfile", "Taskfile", "package.json"
 }
 
 // imlazyBuiltins are command names reserved by ImLazy.
@@ -53,10 +54,6 @@ var (
 	targetRe = regexp.MustCompile(`^([A-Za-z0-9_./%*][A-Za-z0-9_./%* -]*?)\s*:\s*(.*)$`)
 	// makeVarRefRe matches $(VAR) or ${VAR}
 	makeVarRefRe = regexp.MustCompile(`\$[({]([A-Za-z_][A-Za-z0-9_]*)[)}]`)
-	// shellFuncRe matches $(shell cmd)
-	shellFuncRe = regexp.MustCompile(`\$\(shell\s+(.*?)\)`)
-	// gnuFuncRe matches $(wildcard ...), $(patsubst ...), etc.
-	gnuFuncRe = regexp.MustCompile(`\$\((wildcard|patsubst|subst|strip|findstring|filter|filter-out|sort|word|wordlist|words|firstword|lastword|dir|notdir|suffix|basename|addsuffix|addprefix|join|realpath|abspath|foreach|call|value|eval|origin|flavor|error|warning|info)\s`)
 )
 
 // ParseMakefile reads and parses a Makefile at the given path.
@@ -445,42 +442,67 @@ func collapseWhitespace(s string) string {
 }
 
 // ConvertVarRefs converts Makefile variable references to ImLazy format.
-// $(VAR) → {{var}}, $(shell cmd) → $(cmd), automatic vars expanded.
+// $(VAR) → {{var}}, $(shell cmd) → $(cmd), GNU make text functions are
+// evaluated, automatic vars expanded.
 func ConvertVarRefs(s string, ir *MakefileIR, target *MakeTarget) string {
-	// Convert $(shell cmd) → $(cmd)
-	s = shellFuncRe.ReplaceAllString(s, "$($1)")
+	converted, _ := convertVarRefs(s, ir, target)
+	return converted
+}
 
-	// Warn about GNU make functions
-	if gnuFuncRe.MatchString(s) {
-		if ir != nil {
-			ir.Warnings = append(ir.Warnings, fmt.Sprintf("GNU make function in: %s", s))
+// convertVarRefs is ConvertVarRefs plus the make expressions it could not
+// convert. ImLazy runs command strings through bash, which cannot evaluate a
+// make function, so callers turn any leftovers into something inert rather
+// than emitting a line that dies with a shell syntax error.
+func convertVarRefs(s string, ir *MakefileIR, target *MakeTarget) (string, []string) {
+	ev := newMakeEval(ir)
+	converted, _ := ev.expand(s, true, 0)
+
+	if ir != nil {
+		for _, u := range ev.unsupported {
+			addUnique(&ir.Warnings, fmt.Sprintf("unconvertible GNU make function: %s", u))
+		}
+		// Notes describe what a successful conversion changed; when something
+		// was rejected the FIXME comment says all there is to say.
+		if len(ev.unsupported) == 0 {
+			for _, n := range ev.notes {
+				addUnique(&ir.Notes, n)
+			}
+			if ev.evaluated && len(ev.usedVars) > 0 {
+				addUnique(&ir.Notes, fmt.Sprintf("evaluated with %s at migrate time: %s",
+					strings.Join(ev.frozenVars(), " "), collapseWhitespace(s)))
+			}
 		}
 	}
 
 	// Convert automatic variables
 	if target != nil {
-		s = strings.ReplaceAll(s, "$@", target.Name)
+		converted = strings.ReplaceAll(converted, "$@", target.Name)
 		if len(target.Prerequisites) > 0 {
-			s = strings.ReplaceAll(s, "$<", target.Prerequisites[0])
-			s = strings.ReplaceAll(s, "$^", strings.Join(target.Prerequisites, " "))
+			converted = strings.ReplaceAll(converted, "$<", target.Prerequisites[0])
+			converted = strings.ReplaceAll(converted, "$^", strings.Join(target.Prerequisites, " "))
 		}
 	}
 
 	// Convert $(VAR) / ${VAR} → {{var}}
-	s = makeVarRefRe.ReplaceAllStringFunc(s, func(match string) string {
+	converted = makeVarRefRe.ReplaceAllStringFunc(converted, func(match string) string {
 		inner := makeVarRefRe.FindStringSubmatch(match)
 		if len(inner) < 2 {
 			return match
 		}
-		varName := inner[1]
-		// Check if it's a GNU make function (already handled above)
-		if gnuFuncRe.MatchString(match) {
-			return match
-		}
-		return "{{" + strings.ToLower(varName) + "}}"
+		return "{{" + strings.ToLower(inner[1]) + "}}"
 	})
 
-	return s
+	return ev.restore(converted), ev.unsupported
+}
+
+// addUnique appends msg unless it is already present.
+func addUnique(list *[]string, msg string) {
+	for _, existing := range *list {
+		if existing == msg {
+			return
+		}
+	}
+	*list = append(*list, msg)
 }
 
 // mergeIR merges a sub-IR into the main IR (for includes).
@@ -488,6 +510,7 @@ func mergeIR(main *MakefileIR, sub *MakefileIR) {
 	main.Variables = append(main.Variables, sub.Variables...)
 	main.Targets = append(main.Targets, sub.Targets...)
 	main.Warnings = append(main.Warnings, sub.Warnings...)
+	main.Notes = append(main.Notes, sub.Notes...)
 	if main.DefaultGoal == "" && sub.DefaultGoal != "" {
 		main.DefaultGoal = sub.DefaultGoal
 	}

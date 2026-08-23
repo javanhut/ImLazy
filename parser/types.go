@@ -97,6 +97,16 @@ func (p *PlatformRun) GetForCurrentPlatform() []string {
 	return p.Default
 }
 
+// AllCommands returns every run line defined for the command, across all
+// platforms. Validation checks them all, not just the current platform's.
+func (p *PlatformRun) AllCommands() []string {
+	lines := append([]string(nil), p.Default...)
+	for _, cmds := range p.ByOS {
+		lines = append(lines, cmds...)
+	}
+	return lines
+}
+
 // RunOptions holds options for running commands.
 type RunOptions struct {
 	DryRun       bool

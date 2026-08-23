@@ -52,11 +52,15 @@ func Run(opts MigrateOptions) error {
 
 	if opts.Verbose {
 		output.PrintInfo("Found %d variables, %d targets", len(ir.Variables), len(ir.Targets))
-		if len(ir.Warnings) > 0 {
-			for _, w := range ir.Warnings {
-				output.PrintWarning("  Warning: %s", w)
-			}
+		for _, n := range ir.Notes {
+			output.PrintInfo("  Note: %s", n)
 		}
+	}
+
+	// Warnings mean the generated config has holes in it, so they are never
+	// hidden behind --verbose.
+	for _, w := range ir.Warnings {
+		output.PrintWarning("%s", w)
 	}
 
 	// Convert to TOML
@@ -96,6 +100,9 @@ func Run(opts MigrateOptions) error {
 	}
 
 	output.PrintSuccess("Migrated %s → %s (%d commands)", sourcePath, opts.OutputPath, commandCount)
+	if len(ir.Warnings) > 0 {
+		output.PrintWarning("%d item(s) need a hand — search %s for FIXME", len(ir.Warnings), opts.OutputPath)
+	}
 	return nil
 }
 

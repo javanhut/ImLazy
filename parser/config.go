@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -201,9 +202,28 @@ func (c *Config) GetWatchPatterns(name string) []string {
 	return nil
 }
 
+// makeFuncRe matches GNU make text functions that a migrated config may still
+// carry. Only functions that could never be a shell command substitution are
+// listed, so a legitimate "$(basename x)" is not flagged.
+var makeFuncRe = regexp.MustCompile(`\$[({](?:if|subst|patsubst|filter-out|findstring|firstword|lastword|wordlist|notdir|addsuffix|addprefix|wildcard|foreach|origin|flavor)[\s(]`)
+
 // Validate checks the configuration for errors and returns a list of problems.
 func (c *Config) Validate() []string {
 	var errors []string
+
+	for name, value := range c.Variables {
+		if m := makeFuncRe.FindString(value); m != "" {
+			errors = append(errors, fmt.Sprintf("variable '%s' contains an unconverted GNU make function: %s...) — the shell cannot evaluate it", name, strings.TrimRight(m, " \t(")))
+		}
+	}
+
+	for name, cmd := range c.Commands {
+		for _, line := range cmd.Run.AllCommands() {
+			if m := makeFuncRe.FindString(line); m != "" {
+				errors = append(errors, fmt.Sprintf("command '%s' contains an unconverted GNU make function: %s...) — the shell cannot evaluate it", name, strings.TrimRight(m, " \t(")))
+			}
+		}
+	}
 
 	for name, cmd := range c.Commands {
 		for _, dep := range cmd.Dep {

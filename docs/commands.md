@@ -397,14 +397,51 @@ imlazy migrate --force
 imlazy migrate -V
 ```
 
+### GNU Make Functions
+
+Make expands its text functions itself; the shell never sees them. ImLazy runs
+commands through a shell, where `$(strip x)` is command substitution and
+`$(if a,b,)` is a syntax error — so the migration resolves them up front:
+
+- **Evaluated at migrate time**: `strip`, `if`, `and`, `or`, `subst`,
+  `patsubst`, `filter`, `filter-out`, `findstring`, `sort`, `word`, `wordlist`,
+  `words`, `firstword`, `lastword`, `dir`, `notdir`, `suffix`, `basename`,
+  `addsuffix`, `addprefix`, `join`
+- **Translated to shell**: `$(shell cmd)` → `$(cmd)`, `$(wildcard *.c)` → the
+  glob `*.c`, `$(realpath p)` / `$(abspath p)` → a `realpath` call
+- **Not convertible**: `foreach`, `call`, `eval`, `value`, `origin`, `flavor`,
+  `error`, `warning`, `info`, and any function whose arguments aren't known
+  until run time (say, one built from `$(shell ...)`)
+
+Evaluating a function freezes the variables it read, so
+`feature_args := $(if $(strip $(FEATURES)),--features "$(strip $(FEATURES))",)`
+becomes `feature_args = ""`. Override the result at run time instead:
+
+```bash
+imlazy test feature_args="--features enterprise"
+```
+
+The migration notes at the end of the generated file list what got frozen.
+
+Anything that can't be converted is left out rather than handed to the shell
+to choke on: the variable is emptied, the recipe line becomes a stub that
+exits 1, and both get a `# FIXME (imlazy migrate)` comment holding the
+original text. `imlazy migrate` prints those as warnings, and `imlazy
+validate` fails if make syntax survives into a config.
+
+Variables a Makefile references but never assigns (`DESTDIR` and friends) are
+declared as empty defaults, matching make — and still overridable at run time
+with `imlazy install destdir=/tmp/pkg`.
+
 ### Warnings
 
-Some Makefile constructs can't be converted 1:1. The migration emits warnings as TOML comments at the end of the generated file for things like:
+Some Makefile constructs can't be converted 1:1. The migration prints warnings
+and repeats them as TOML comments at the end of the generated file, for things
+like:
 
 - `include` directives
 - Conditional blocks (`ifeq`/`ifdef`)
-- Shell functions (`$(shell ...)`)
-- Complex variable assignments (`:=`, `?=`, `+=`)
+- Unconvertible GNU make functions (see above)
 
 Review the generated file and adjust as needed.
 

@@ -1055,3 +1055,23 @@ func TestBuildCommand(t *testing.T) {
 		t.Fatal("buildCommand returned nil")
 	}
 }
+
+func TestValidateFlagsUnconvertedMakeFunctions(t *testing.T) {
+	c := &Config{
+		Variables: map[string]string{"flags": `$(if $(strip ),--features "",)`},
+		Commands: map[string]Command{
+			"gen":  {Run: PlatformRun{Default: []string{"echo $(foreach f,a b,x$(f))"}}},
+			"fine": {Run: PlatformRun{Default: []string{"echo $(basename foo.txt)"}}},
+		},
+	}
+
+	errs := c.Validate()
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 errors, got %d: %q", len(errs), errs)
+	}
+	for _, e := range errs {
+		if strings.Contains(e, "'fine'") {
+			t.Errorf("shell command substitution flagged: %s", e)
+		}
+	}
+}
