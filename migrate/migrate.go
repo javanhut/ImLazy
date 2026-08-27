@@ -132,6 +132,17 @@ func HasMakefile() bool {
 	return err == nil
 }
 
+// ParseSource parses a migration source file, dispatching on its filename.
+func ParseSource(path string) (*MakefileIR, error) {
+	return parseSource(path)
+}
+
+// DiscoverSource finds the migration source file in the current directory, or
+// validates the explicit path when one is given.
+func DiscoverSource(explicit string) (string, error) {
+	return discoverSource(explicit)
+}
+
 // parseSource dispatches to the right parser based on the source filename.
 func parseSource(path string) (*MakefileIR, error) {
 	base := strings.ToLower(filepath.Base(path))

@@ -538,3 +538,106 @@ func TestParseMultiTargetRule(t *testing.T) {
 		}
 	}
 }
+
+// A define'd macro is invoked as $(name), which is command substitution to the
+// shell. Migrating RavenFileManager's Makefile produced a lazy.toml whose
+// install command ran "$(update-caches)" verbatim and died with
+// "update-caches: command not found" (exit 127), because the macro was stored
+// under a name no {{placeholder}} can spell and its call sites were left as
+// make syntax.
+func TestParseDefineCannedRecipe(t *testing.T) {
+	input := "define update-caches\n" +
+		"\t@if [ -z \"$(DESTDIR)\" ]; then \\\n" +
+		"\t\tcommand -v update-desktop-database >/dev/null 2>&1 && \\\n" +
+		"\t\t\tupdate-desktop-database -q \"$(DATADIR)/applications\" || true; \\\n" +
+		"\tfi\n" +
+		"endef\n"
+
+	ir, err := parseMakefileContent(input, ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(ir.Variables) != 1 {
+		t.Fatalf("expected 1 variable, got %d", len(ir.Variables))
+	}
+	v := ir.Variables[0]
+	if v.Name != "update-caches" {
+		t.Errorf("name: got %q", v.Name)
+	}
+	want := `if [ -z "$(DESTDIR)" ]; then command -v update-desktop-database ` +
+		`>/dev/null 2>&1 && update-desktop-database -q "$(DATADIR)/applications" || true; fi`
+	if v.Value != want {
+		t.Errorf("value:\n got %q\nwant %q", v.Value, want)
+	}
+}
+
+func TestSanitizeVarName(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"update-caches", "update_caches"},
+		{"BIN_NAME", "bin_name"},
+		{"my.var", "my_var"},
+		{"already_fine", "already_fine"},
+	}
+	for _, tt := range tests {
+		if got := SanitizeVarName(tt.in); got != tt.want {
+			t.Errorf("SanitizeVarName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestConvertDefineMacroCallSites(t *testing.T) {
+	input := "DESTDIR =\n" +
+		"DATADIR = /usr/local/share\n" +
+		"\n" +
+		"define update-caches\n" +
+		"\t@command -v gtk-update-icon-cache >/dev/null 2>&1 && \\\n" +
+		"\t\tgtk-update-icon-cache -qtf \"$(DATADIR)/icons\" || true\n" +
+		"endef\n" +
+		"\n" +
+		".PHONY: install\n" +
+		"install:\n" +
+		"\tinstall -Dm755 app \"$(DESTDIR)/usr/bin/app\"\n" +
+		"\t$(update-caches)\n"
+
+	ir, err := parseMakefileContent(input, ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := ConvertToTOML(ir)
+
+	// The macro is declared under a name a placeholder can actually spell...
+	if !strings.Contains(out, `update_caches = "command -v gtk-update-icon-cache`) {
+		t.Errorf("macro not declared as update_caches:\n%s", out)
+	}
+	// ...and its call site references it rather than shelling out to it.
+	if !strings.Contains(out, `"{{update_caches}}"`) {
+		t.Errorf("call site not converted to a placeholder:\n%s", out)
+	}
+	if strings.Contains(out, "$(update-caches)") {
+		t.Errorf("call site still contains make syntax:\n%s", out)
+	}
+	// The name must not also be re-emitted as an empty undeclared default,
+	// which would silently blank the macro out.
+	if strings.Contains(out, `update_caches = ""`) {
+		t.Errorf("macro emitted as an empty undeclared default:\n%s", out)
+	}
+}
+
+// Only a name the source actually defined is treated as a variable; a genuine
+// shell command substitution with a hyphen must survive untouched.
+func TestConvertLeavesUndeclaredHyphenatedSubstitution(t *testing.T) {
+	input := ".PHONY: stamp\n" +
+		"stamp:\n" +
+		"\techo $(git-describe-wrapper)\n"
+
+	ir, err := parseMakefileContent(input, ".", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := ConvertToTOML(ir)
+
+	if !strings.Contains(out, "$(git-describe-wrapper)") {
+		t.Errorf("shell command substitution was rewritten:\n%s", out)
+	}
+}

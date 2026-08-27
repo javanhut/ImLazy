@@ -60,7 +60,7 @@ func main() {
 
 	// Subcommands that parse their own flags; once one is seen, stop
 	// interpreting global flags and pass everything through.
-	subcommands := map[string]bool{"migrate": true, "add": true, "completion": true}
+	subcommands := map[string]bool{"migrate": true, "sync": true, "add": true, "completion": true}
 
 	// Filter out flags and find command
 	var remainingArgs []string
@@ -136,6 +136,19 @@ func main() {
 			mopts.Verbose = true
 		}
 		if err := migrate.Run(mopts); err != nil {
+			output.PrintError("Error: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Handle sync command (reads config, but not through the runner)
+	if len(remainingArgs) > 0 && remainingArgs[0] == "sync" {
+		sopts := parseSyncArgs(remainingArgs[1:])
+		if opts.DryRun {
+			sopts.DryRun = true
+		}
+		if err := runSync(sopts, opts.Quiet); err != nil {
 			output.PrintError("Error: %v", err)
 			os.Exit(1)
 		}
@@ -710,6 +723,7 @@ func printBasicHelp() {
 	fmt.Println("  completion <shell> Generate shell completion (bash, zsh, fish, ravenshell)")
 	fmt.Println("  completion install Install completions for your current shell")
 	fmt.Println("  migrate            Convert Makefile/justfile/Taskfile/package.json to lazy.toml")
+	fmt.Println("  sync               Add commands added to the Makefile since migrating")
 	fmt.Println("  history [n]        Show recent command history")
 	fmt.Println("  last, again, -     Replay last command from history")
 	fmt.Println()
@@ -757,6 +771,7 @@ func printHelp(info *parser.Config) {
 		{"watch <cmd>", "Watch files and re-run command on changes"},
 		{"completion", "Generate or install shell completion (bash, zsh, fish, ravenshell)"},
 		{"migrate", "Convert Makefile/justfile/Taskfile/package.json to lazy.toml"},
+		{"sync", "Add commands added to the Makefile since migrating"},
 		{"history [n]", "Show recent command history"},
 		{"last, again", "Replay last command from history"},
 	}
@@ -791,4 +806,60 @@ func printHelp(info *parser.Config) {
 	if len(aliasExamples) > 0 {
 		fmt.Printf("  imlazy %s\n", strings.Join(aliasExamples[:1], ""))
 	}
+}
+
+// parseSyncArgs parses sync-specific arguments from the command line.
+func parseSyncArgs(args []string) parser.SyncOptions {
+	opts := parser.SyncOptions{}
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "--source="):
+			opts.SourcePath = strings.TrimPrefix(arg, "--source=")
+		case strings.HasPrefix(arg, "--config="):
+			opts.ConfigPath = strings.TrimPrefix(arg, "--config=")
+		case arg == "--dry-run" || arg == "-n":
+			opts.DryRun = true
+		}
+	}
+	return opts
+}
+
+// runSync adds commands that appeared in the source file since the last
+// migrate, and reports what changed.
+func runSync(opts parser.SyncOptions, quiet bool) error {
+	result, err := parser.Sync(opts)
+	if err != nil {
+		return err
+	}
+
+	for _, w := range result.Warnings {
+		output.PrintWarning("%s", w)
+	}
+
+	if len(result.Added) == 0 && len(result.AddedVars) == 0 {
+		if !quiet {
+			output.PrintInfo("%s is up to date with %s", result.ConfigPath, result.SourcePath)
+		}
+		return nil
+	}
+
+	if opts.DryRun {
+		fmt.Print(result.Preview)
+		return nil
+	}
+
+	if quiet {
+		return nil
+	}
+	output.PrintSuccess("Synced %s → %s (%d new command(s): %s)",
+		result.SourcePath, result.ConfigPath,
+		len(result.Added), strings.Join(result.Added, ", "))
+	if len(result.AddedVars) > 0 {
+		output.PrintInfo("Added variable(s) they reference: %s", strings.Join(result.AddedVars, ", "))
+	}
+	if len(result.Warnings) > 0 {
+		output.PrintWarning("%d item(s) need a hand — search %s for FIXME",
+			len(result.Warnings), result.ConfigPath)
+	}
+	return nil
 }

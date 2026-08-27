@@ -16,7 +16,7 @@ _imlazy_completions() {
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Built-in commands
-    local builtins="help how init add edit version validate list watch completion migrate history last again"
+    local builtins="help how init add edit version validate list watch completion migrate sync history last again"
 
     # Get commands from lazy.toml if it exists
     local commands=""
@@ -88,6 +88,7 @@ _imlazy() {
         'list:List commands'
         'completion:Generate or install shell completion script'
         'migrate:Convert Makefile/justfile/Taskfile/package.json to lazy.toml'
+        'sync:Add commands added to the Makefile since migrating'
         'history:Show recent command history'
         'last:Replay last command'
         'again:Replay last command'
@@ -153,6 +154,7 @@ complete -c imlazy -n '__fish_use_subcommand' -a 'validate' -d 'Validate lazy.to
 complete -c imlazy -n '__fish_use_subcommand' -a 'list' -d 'List commands'
 complete -c imlazy -n '__fish_use_subcommand' -a 'completion' -d 'Generate or install shell completion script'
 complete -c imlazy -n '__fish_use_subcommand' -a 'migrate' -d 'Convert Makefile/justfile/Taskfile/package.json'
+complete -c imlazy -n '__fish_use_subcommand' -a 'sync' -d 'Add commands added to the Makefile since migrating'
 complete -c imlazy -n '__fish_use_subcommand' -a 'history' -d 'Show recent command history'
 complete -c imlazy -n '__fish_use_subcommand' -a 'last' -d 'Replay last command'
 complete -c imlazy -n '__fish_use_subcommand' -a 'again' -d 'Replay last command'
@@ -228,6 +230,7 @@ func Ravenshell() (string, error) {
 				{"watch", "Watch files and re-run a command on changes"},
 				{"completion", "Generate or install shell completion"},
 				{"migrate", "Convert Makefile/justfile/Taskfile/package.json"},
+				{"sync", "Add commands added to the Makefile since migrating"},
 				{"history", "Show recent command history"},
 				{"last", "Replay last command"},
 				{"again", "Replay last command"},

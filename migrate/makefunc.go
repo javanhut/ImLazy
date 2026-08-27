@@ -207,21 +207,32 @@ func (e *makeEval) evalExpr(inner, raw string, keepVars bool, depth int) (string
 	}
 
 	varName := strings.TrimSpace(inner)
-	if !isMakeVarName(varName) {
+	_, declared := e.vars[varName]
+	if !isMakeVarName(varName) && !declared {
 		// Not a make construct at all — e.g. "$(date +%Y)" in a justfile
-		// recipe, which is already shell command substitution.
+		// recipe, which is already shell command substitution. A name make
+		// would reject is only treated as a variable when the source actually
+		// defined one, so "$(update-caches)" converts and "$(some-command)"
+		// is still left for the shell.
 		return e.protect(raw), false
 	}
 	if keepVars {
+		if !isMakeVarName(varName) {
+			// The $(VAR) → {{var}} pass in convertVarRefs only recognises
+			// identifier names, so a define'd macro like "update-caches" has
+			// to become its placeholder here or it reaches bash as command
+			// substitution and dies with "command not found".
+			return e.protect("{{" + SanitizeVarName(varName) + "}}"), false
+		}
 		return raw, false
 	}
 	if e.expanding[varName] {
 		return "", false // recursive variable; give up rather than loop
 	}
-	value, defined := e.vars[varName]
-	if !defined {
+	if !declared {
 		return "", true // undefined variables expand to empty, as in make
 	}
+	value := e.vars[varName]
 	e.expanding[varName] = true
 	defer delete(e.expanding, varName)
 	e.usedVars[varName] = true

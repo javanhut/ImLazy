@@ -64,10 +64,10 @@ func withUndeclaredVars(varsSection string, ir *MakefileIR, generated string) st
 	exported := make(map[string]MakeVar)
 	for _, v := range ir.Variables {
 		if v.Export {
-			exported[strings.ToLower(v.Name)] = v
+			exported[SanitizeVarName(v.Name)] = v
 			continue
 		}
-		declared[strings.ToLower(v.Name)] = true
+		declared[SanitizeVarName(v.Name)] = true
 	}
 
 	var missing []string
@@ -126,7 +126,7 @@ func writeVariables(b *strings.Builder, ir *MakefileIR) {
 
 	b.WriteString("[variables]\n")
 	for _, v := range vars {
-		name := strings.ToLower(v.Name)
+		name := SanitizeVarName(v.Name)
 		value, unsupported := convertVarRefs(v.Value, ir, nil)
 		if len(unsupported) > 0 {
 			// A make function bash cannot run would break every command that
@@ -161,12 +161,7 @@ func writeEnv(b *strings.Builder, ir *MakefileIR) {
 // writeCommands writes the [commands] section, converting Make targets to ImLazy commands.
 func writeCommands(b *strings.Builder, ir *MakefileIR) {
 	// Build set of target names for dependency resolution
-	targetNames := make(map[string]bool)
-	for _, t := range ir.Targets {
-		if !ShouldSkipTarget(t) {
-			targetNames[t.Name] = true
-		}
-	}
+	targetNames := eligibleTargetNames(ir)
 
 	b.WriteString("[commands]\n\n")
 
@@ -174,50 +169,66 @@ func writeCommands(b *strings.Builder, ir *MakefileIR) {
 		if ShouldSkipTarget(t) {
 			continue
 		}
-
-		// Recipe → run array. Converted before the table header so any
-		// FIXME comments land above the command they belong to.
-		var recipe strings.Builder
-		if len(t.Recipe) > 0 {
-			convertedRecipe := make([]string, 0, len(t.Recipe))
-			for _, line := range t.Recipe {
-				converted, unsupported := convertVarRefs(line, ir, &t)
-				if len(unsupported) > 0 {
-					writeFixme(b, unsupported, line)
-					converted = unmigratedRecipeStub
-				}
-				convertedRecipe = append(convertedRecipe, cleanRecipeLine(converted))
-			}
-			recipe.WriteString(formatRunArray(convertedRecipe))
-		}
-
-		name := SanitizeTargetName(t.Name)
-		if strings.Contains(name, ":") {
-			// Namespaced names (npm-style "test:watch") need quoted keys.
-			b.WriteString(fmt.Sprintf("[commands.%q]\n", name))
-		} else {
-			b.WriteString(fmt.Sprintf("[commands.%s]\n", name))
-		}
-
-		// Description from comment
-		if t.Comment != "" {
-			b.WriteString(fmt.Sprintf("desc = %q\n", t.Comment))
-		}
-
-		b.WriteString(recipe.String())
-
-		// Dependencies — only include prerequisites that are also targets
-		deps := filterDeps(t.Prerequisites, targetNames)
-		if len(deps) > 0 {
-			sanitizedDeps := make([]string, len(deps))
-			for i, d := range deps {
-				sanitizedDeps[i] = SanitizeTargetName(d)
-			}
-			b.WriteString(formatStringArray("dep", sanitizedDeps))
-		}
-
+		writeCommand(b, ir, t, targetNames)
 		b.WriteString("\n")
 	}
+}
+
+// writeCommand writes the [commands.name] table for a single target.
+// targetNames is the set of target names eligible to become dependencies.
+func writeCommand(b *strings.Builder, ir *MakefileIR, t MakeTarget, targetNames map[string]bool) {
+	// Recipe → run array. Converted before the table header so any
+	// FIXME comments land above the command they belong to.
+	var recipe strings.Builder
+	if len(t.Recipe) > 0 {
+		convertedRecipe := make([]string, 0, len(t.Recipe))
+		for _, line := range t.Recipe {
+			converted, unsupported := convertVarRefs(line, ir, &t)
+			if len(unsupported) > 0 {
+				writeFixme(b, unsupported, line)
+				converted = unmigratedRecipeStub
+			}
+			convertedRecipe = append(convertedRecipe, cleanRecipeLine(converted))
+		}
+		recipe.WriteString(formatRunArray(convertedRecipe))
+	}
+
+	name := SanitizeTargetName(t.Name)
+	if strings.Contains(name, ":") {
+		// Namespaced names (npm-style "test:watch") need quoted keys.
+		b.WriteString(fmt.Sprintf("[commands.%q]\n", name))
+	} else {
+		b.WriteString(fmt.Sprintf("[commands.%s]\n", name))
+	}
+
+	// Description from comment
+	if t.Comment != "" {
+		b.WriteString(fmt.Sprintf("desc = %q\n", t.Comment))
+	}
+
+	b.WriteString(recipe.String())
+
+	// Dependencies — only include prerequisites that are also targets
+	deps := filterDeps(t.Prerequisites, targetNames)
+	if len(deps) > 0 {
+		sanitizedDeps := make([]string, len(deps))
+		for i, d := range deps {
+			sanitizedDeps[i] = SanitizeTargetName(d)
+		}
+		b.WriteString(formatStringArray("dep", sanitizedDeps))
+	}
+}
+
+// eligibleTargetNames returns the set of target names that become commands,
+// i.e. those usable as dependencies.
+func eligibleTargetNames(ir *MakefileIR) map[string]bool {
+	names := make(map[string]bool)
+	for _, t := range ir.Targets {
+		if !ShouldSkipTarget(t) {
+			names[t.Name] = true
+		}
+	}
+	return names
 }
 
 // writeWarnings appends migration warnings and notes as TOML comments at the

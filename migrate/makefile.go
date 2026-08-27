@@ -190,21 +190,18 @@ func parseMakefileContent(content string, baseDir string, visited map[string]boo
 		// define...endef multi-line variable
 		if strings.HasPrefix(trimmed, "define ") {
 			varName := strings.TrimSpace(strings.TrimPrefix(trimmed, "define"))
-			var valueBuf strings.Builder
+			var body []string
 			i++
 			for i < len(lines) {
 				if strings.TrimSpace(lines[i]) == "endef" {
 					break
 				}
-				if valueBuf.Len() > 0 {
-					valueBuf.WriteString("\n")
-				}
-				valueBuf.WriteString(lines[i])
+				body = append(body, lines[i])
 				i++
 			}
 			ir.Variables = append(ir.Variables, MakeVar{
 				Name:   varName,
-				Value:  valueBuf.String(),
+				Value:  defineBodyValue(body),
 				Flavor: "=",
 			})
 			commentBuf.Reset()
@@ -525,6 +522,71 @@ func SanitizeTargetName(name string) string {
 		return "make_" + name
 	}
 	return name
+}
+
+// defineBodyValue turns the body of a define...endef block into a variable
+// value. Make uses define for two unrelated things, and they need opposite
+// treatment: a canned recipe, whose lines are tab-indented because make pastes
+// them into a rule for the shell to run, and a plain text blob such as help
+// output. Tab-indented bodies are flattened the way a recipe is — tab and
+// @/-/+ prefixes stripped, lines joined with ";" so they stay ordered — since
+// an ImLazy variable interpolates into a single command string. Everything
+// else is kept verbatim.
+func defineBodyValue(body []string) string {
+	isRecipe := false
+	for _, line := range body {
+		if strings.HasPrefix(line, "\t") {
+			isRecipe = true
+			break
+		}
+	}
+	if !isRecipe {
+		return strings.Join(body, "\n")
+	}
+
+	var flattened []string
+	for _, line := range body {
+		line = collapseWhitespace(stripRecipePrefix(strings.TrimPrefix(line, "\t")))
+		if line = strings.TrimSpace(line); line != "" {
+			flattened = append(flattened, line)
+		}
+	}
+	return joinShellLines(flattened)
+}
+
+// SanitizeVarName converts a Makefile variable name into an ImLazy variable
+// name. An ImLazy placeholder is {{[A-Za-z0-9_]+}}, but make accepts names
+// like "update-caches" — common for define'd macros — which would leave an
+// unresolvable {{update-caches}} in the output, so anything outside that set
+// folds to "_".
+func SanitizeVarName(name string) string {
+	var b strings.Builder
+	for _, ch := range strings.ToLower(name) {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9', ch == '_':
+			b.WriteRune(ch)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+// joinShellLines joins already-flattened shell lines into one command string,
+// without doubling a ";" a line already ends with.
+func joinShellLines(lines []string) string {
+	var b strings.Builder
+	for _, line := range lines {
+		if b.Len() > 0 {
+			if strings.HasSuffix(strings.TrimRight(b.String(), " "), ";") {
+				b.WriteString(" ")
+			} else {
+				b.WriteString("; ")
+			}
+		}
+		b.WriteString(line)
+	}
+	return b.String()
 }
 
 // ShouldSkipTarget returns true if the target should not be included in the output.
